@@ -1,7 +1,5 @@
-"""Market Macro Lakehouse package."""
+"""Shared utilities for lakehouse pipelines."""
 
 from lakehouse.common.models import LoadResult
 
 __all__ = ["LoadResult"]
-
-__version__ = "0.1.0"

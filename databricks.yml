@@ -1,0 +1,7 @@
+bundle:
+  name: market-macro-lakehouse
+
+sync:
+  paths:
+    - notebooks
+    - src
