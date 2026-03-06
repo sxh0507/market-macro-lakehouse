@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Phase-1 Databricks Bronze ingestion skeleton."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["requests>=2.31"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

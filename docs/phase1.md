@@ -9,7 +9,7 @@ The project goal remains the full Medallion structure described in the README. T
 The repository currently keeps a single path:
 
 ```text
-Coinbase -> Bronze notebook -> Python package orchestration
+Coinbase API -> Thin Bronze notebook -> src/lakehouse package -> Bronze Delta table
 ```
 
 Files kept for this stage:
@@ -22,18 +22,18 @@ Files kept for this stage:
 
 ## Purpose
 
-This phase is only meant to verify:
+This phase is currently meant to verify:
 
 - the setup notebook can bootstrap the initial catalog schemas and Bronze tables
 - the repo can be imported into Databricks Repos
 - the notebook can import code from `src/lakehouse`
+- the Coinbase Bronze flow can fetch real API data and merge it into Delta
 - the Bronze entrypoint returns a stable payload shape
 
 ## Deferred Until Later Phases
 
 These parts are intentionally postponed:
 
-- real Coinbase API ingestion and Delta write logic
 - Silver and Gold layers
 - observability rules
 - unit tests and CI
@@ -42,4 +42,4 @@ These parts are intentionally postponed:
 
 ## Next Step
 
-The next implementation target should be making the Bronze notebook perform a real Bronze write while keeping the notebook thin and pushing reusable logic into `src/lakehouse`.
+The next implementation target should be building the Silver and Gold layers on top of the validated Coinbase Bronze path and then expanding macro sources and observability.
