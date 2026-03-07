@@ -133,3 +133,57 @@ class SilverIngestionResult:
             "per_product_rows_rejected": self.per_product_rows_rejected,
             "per_product_rows_merged": self.per_product_rows_merged,
         }
+
+
+@dataclass(slots=True)
+class GoldIngestionResult:
+    """Structured result returned by the Gold market returns/volatility pipeline."""
+
+    status: str
+    mode: str
+    product_ids: list[str]
+    start_date: str
+    end_date: str
+    source_history_start_date: str
+    source_table: str
+    returns_table: str
+    volatility_table: str
+    rows_read: int
+    rows_returns_ready: int
+    rows_volatility_ready: int
+    rows_returns_to_update: int
+    rows_returns_to_insert: int
+    rows_returns_merged: int
+    rows_volatility_to_update: int
+    rows_volatility_to_insert: int
+    rows_volatility_merged: int
+    run_id: str
+    per_product_rows_read: dict[str, int] = field(default_factory=dict)
+    per_product_rows_returns: dict[str, int] = field(default_factory=dict)
+    per_product_rows_volatility: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "mode": self.mode,
+            "product_ids": self.product_ids,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "source_history_start_date": self.source_history_start_date,
+            "source_table": self.source_table,
+            "returns_table": self.returns_table,
+            "volatility_table": self.volatility_table,
+            "rows_read": self.rows_read,
+            "rows_returns_ready": self.rows_returns_ready,
+            "rows_volatility_ready": self.rows_volatility_ready,
+            "rows_returns_to_update": self.rows_returns_to_update,
+            "rows_returns_to_insert": self.rows_returns_to_insert,
+            "rows_returns_merged": self.rows_returns_merged,
+            "rows_volatility_to_update": self.rows_volatility_to_update,
+            "rows_volatility_to_insert": self.rows_volatility_to_insert,
+            "rows_volatility_merged": self.rows_volatility_merged,
+            "run_id": self.run_id,
+            "per_product_rows_read": self.per_product_rows_read,
+            "per_product_rows_returns": self.per_product_rows_returns,
+            "per_product_rows_volatility": self.per_product_rows_volatility,
+        }
