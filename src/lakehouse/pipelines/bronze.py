@@ -7,8 +7,9 @@ from typing import Any, Callable
 import requests
 
 from lakehouse.common.models import BronzeIngestionResult, LoadResult
+from lakehouse.common.runtime import parse_product_ids, resolve_date_window
 from lakehouse.sources.base import SourceAdapter
-from lakehouse.sources.coinbase import CoinbaseSource, parse_product_ids, resolve_date_window
+from lakehouse.sources.coinbase import CoinbaseSource
 
 
 def run_bronze_ingestion(

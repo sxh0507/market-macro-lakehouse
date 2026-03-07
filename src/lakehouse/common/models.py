@@ -81,3 +81,55 @@ class BronzeIngestionResult:
                 for product_id, stats in self.per_product_stats.items()
             },
         }
+
+
+@dataclass(slots=True)
+class SilverIngestionResult:
+    """Structured result returned by the Silver crypto OHLC pipeline."""
+
+    status: str
+    mode: str
+    product_ids: list[str]
+    start_date: str
+    end_date: str
+    source_table: str
+    target_table: str
+    quarantine_table: str
+    rows_read: int
+    rows_after_dedup: int
+    rows_structural_invalid: int
+    rows_rejected: int
+    rows_quarantined: int
+    rows_to_update: int
+    rows_to_insert: int
+    rows_merged: int
+    run_id: str
+    per_product_rows_read: dict[str, int] = field(default_factory=dict)
+    per_product_rows_after_dedup: dict[str, int] = field(default_factory=dict)
+    per_product_rows_rejected: dict[str, int] = field(default_factory=dict)
+    per_product_rows_merged: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "mode": self.mode,
+            "product_ids": self.product_ids,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "source_table": self.source_table,
+            "target_table": self.target_table,
+            "quarantine_table": self.quarantine_table,
+            "rows_read": self.rows_read,
+            "rows_after_dedup": self.rows_after_dedup,
+            "rows_structural_invalid": self.rows_structural_invalid,
+            "rows_rejected": self.rows_rejected,
+            "rows_quarantined": self.rows_quarantined,
+            "rows_to_update": self.rows_to_update,
+            "rows_to_insert": self.rows_to_insert,
+            "rows_merged": self.rows_merged,
+            "run_id": self.run_id,
+            "per_product_rows_read": self.per_product_rows_read,
+            "per_product_rows_after_dedup": self.per_product_rows_after_dedup,
+            "per_product_rows_rejected": self.per_product_rows_rejected,
+            "per_product_rows_merged": self.per_product_rows_merged,
+        }
