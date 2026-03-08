@@ -15,6 +15,7 @@ from lakehouse.common.models import (
     LoadResult,
 )
 from lakehouse.common.runtime import UTC, parse_product_ids, parse_series_ids, resolve_date_window
+from lakehouse.observability import PipelineObserver
 from lakehouse.sources.base import SourceAdapter
 from lakehouse.sources.coinbase import CoinbaseSource
 from lakehouse.sources.ecb import EcbSource
@@ -183,121 +184,156 @@ def run_coinbase_bronze_ingestion(
     product_ids = parse_product_ids(raw_product_ids)
     start_date, end_date = resolve_date_window(mode, start_date_raw, end_date_raw, lookback_days_raw)
     schema = build_coinbase_bronze_schema()
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=target_table.split(".", 1)[0],
+        pipeline_name="bronze_market_coinbase",
+        layer="bronze",
+        source_name="coinbase",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "product_ids": product_ids,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
+    )
 
-    all_records: list[dict[str, Any]] = []
-    per_product_stats = {}
-    session = requests.Session()
+    with observer:
+        all_records: list[dict[str, Any]] = []
+        per_product_stats = {}
+        session = requests.Session()
 
-    try:
-        for product_id in product_ids:
-            print(
-                f"Fetching {product_id} from {start_date.isoformat()} "
-                f"to {end_date.isoformat()} in {mode} mode"
-            )
-            records, stats = source.fetch_daily_candles(
-                session=session,
-                product_id=product_id,
-                start_date=start_date,
-                end_date=end_date,
+        try:
+            for product_id in product_ids:
+                print(
+                    f"Fetching {product_id} from {start_date.isoformat()} "
+                    f"to {end_date.isoformat()} in {mode} mode"
+                )
+                records, stats = source.fetch_daily_candles(
+                    session=session,
+                    product_id=product_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    run_id=run_id,
+                )
+                all_records.extend(records)
+                per_product_stats[product_id] = stats
+                print(
+                    f"{product_id}: fetched={stats.api_rows_fetched} "
+                    f"in_range={stats.rows_in_requested_range} "
+                    f"windows={stats.request_windows}"
+                )
+        finally:
+            session.close()
+
+        rows_fetched = sum(stats.api_rows_fetched for stats in per_product_stats.values())
+        rows_after_filter = len(all_records)
+        observer.update_progress(rows_read=rows_fetched)
+
+        if not all_records:
+            result = BronzeIngestionResult(
+                status="success_empty",
+                mode=mode,
+                product_ids=product_ids,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                rows_fetched=rows_fetched,
+                rows_after_filter=0,
+                rows_after_dedup=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
                 run_id=run_id,
+                target_table=target_table,
+                per_product_stats=per_product_stats,
             )
-            all_records.extend(records)
-            per_product_stats[product_id] = stats
-            print(
-                f"{product_id}: fetched={stats.api_rows_fetched} "
-                f"in_range={stats.rows_in_requested_range} "
-                f"windows={stats.request_windows}"
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_fetched,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="bar_date",
+                watermark_column="bar_date",
             )
-    finally:
-        session.close()
+            return result
 
-    rows_fetched = sum(stats.api_rows_fetched for stats in per_product_stats.values())
-    rows_after_filter = len(all_records)
+        raw_df = spark.createDataFrame(all_records, schema=schema)
+        date_filtered_df = raw_df.filter(
+            (F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date))
+        )
 
-    if not all_records:
-        return BronzeIngestionResult(
-            status="success_empty",
+        dedup_window = Window.partitionBy("product_id", "bar_date").orderBy(
+            F.col("source_window_end").desc(),
+            F.col("ingested_at").desc(),
+            F.col("payload_hash").desc(),
+        )
+
+        deduped_df = (
+            date_filtered_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
+
+        rows_after_dedup = deduped_df.count()
+        existing_key_count = (
+            deduped_df.select("product_id", "bar_date")
+            .join(
+                spark.table(target_table).select("product_id", "bar_date"),
+                on=["product_id", "bar_date"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            deduped_df.alias("src"),
+            "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
+        ).whenMatchedUpdate(
+            set={
+                "open": "src.open",
+                "high": "src.high",
+                "low": "src.low",
+                "close": "src.close",
+                "volume": "src.volume",
+                "source_window_start": "src.source_window_start",
+                "source_window_end": "src.source_window_end",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+                "payload_hash": "src.payload_hash",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(deduped_df.orderBy("product_id", "bar_date"))
+
+        result = BronzeIngestionResult(
+            status="success",
             mode=mode,
             product_ids=product_ids,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
             rows_fetched=rows_fetched,
-            rows_after_filter=0,
-            rows_after_dedup=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_after_filter=rows_after_filter,
+            rows_after_dedup=rows_after_dedup,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_after_dedup - existing_key_count,
+            rows_merged=rows_after_dedup,
             run_id=run_id,
             target_table=target_table,
             per_product_stats=per_product_stats,
         )
-
-    raw_df = spark.createDataFrame(all_records, schema=schema)
-    date_filtered_df = raw_df.filter(
-        (F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date))
-    )
-
-    dedup_window = Window.partitionBy("product_id", "bar_date").orderBy(
-        F.col("source_window_end").desc(),
-        F.col("ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
-
-    deduped_df = (
-        date_filtered_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
-
-    rows_after_dedup = deduped_df.count()
-    existing_key_count = (
-        deduped_df.select("product_id", "bar_date")
-        .join(
-            spark.table(target_table).select("product_id", "bar_date"),
-            on=["product_id", "bar_date"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_fetched,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="bar_date",
+            watermark_column="bar_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        deduped_df.alias("src"),
-        "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
-    ).whenMatchedUpdate(
-        set={
-            "open": "src.open",
-            "high": "src.high",
-            "low": "src.low",
-            "close": "src.close",
-            "volume": "src.volume",
-            "source_window_start": "src.source_window_start",
-            "source_window_end": "src.source_window_end",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-            "payload_hash": "src.payload_hash",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(deduped_df.orderBy("product_id", "bar_date"))
-
-    return BronzeIngestionResult(
-        status="success",
-        mode=mode,
-        product_ids=product_ids,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        rows_fetched=rows_fetched,
-        rows_after_filter=rows_after_filter,
-        rows_after_dedup=rows_after_dedup,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_after_dedup - existing_key_count,
-        rows_merged=rows_after_dedup,
-        run_id=run_id,
-        target_table=target_table,
-        per_product_stats=per_product_stats,
-    )
+        return result
 
 
 def run_ecb_bronze_ingestion(
@@ -337,115 +373,150 @@ def run_ecb_bronze_ingestion(
         latest_complete_timezone_label="Europe/Berlin",
     )
     schema = build_ecb_bronze_schema()
-
-    print(
-        f"Fetching ECB FX reference rates for {','.join(quote_currencies)} "
-        f"from {start_date.isoformat()} to {end_date.isoformat()} in {mode} mode"
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=target_table.split(".", 1)[0],
+        pipeline_name="bronze_macro_ecb_fx_ref_rates_daily",
+        layer="bronze",
+        source_name="ecb",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "quote_currencies": quote_currencies,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
     )
 
-    session = requests.Session()
-    try:
-        records, per_currency_stats, request_url, series_key = source.fetch_reference_rates(
-            session=session,
-            quote_currencies=quote_currencies,
-            start_date=start_date,
-            end_date=end_date,
-            run_id=run_id,
+    with observer:
+        print(
+            f"Fetching ECB FX reference rates for {','.join(quote_currencies)} "
+            f"from {start_date.isoformat()} to {end_date.isoformat()} in {mode} mode"
         )
-    finally:
-        session.close()
 
-    rows_fetched = sum(stats.api_rows_fetched for stats in per_currency_stats.values())
-    rows_after_filter = len(records)
-    print(
-        f"ECB: fetched={rows_fetched} "
-        f"currencies={len(quote_currencies)} "
-        f"series_key={series_key}"
-    )
+        session = requests.Session()
+        try:
+            records, per_currency_stats, request_url, series_key = source.fetch_reference_rates(
+                session=session,
+                quote_currencies=quote_currencies,
+                start_date=start_date,
+                end_date=end_date,
+                run_id=run_id,
+            )
+        finally:
+            session.close()
 
-    if not records:
-        return EcbBronzeIngestionResult(
-            status="success_empty",
+        rows_fetched = sum(stats.api_rows_fetched for stats in per_currency_stats.values())
+        rows_after_filter = len(records)
+        observer.update_progress(rows_read=rows_fetched)
+        print(
+            f"ECB: fetched={rows_fetched} "
+            f"currencies={len(quote_currencies)} "
+            f"series_key={series_key}"
+        )
+
+        if not records:
+            result = EcbBronzeIngestionResult(
+                status="success_empty",
+                mode=mode,
+                quote_currencies=quote_currencies,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                request_url=request_url,
+                series_key=series_key,
+                rows_fetched=0,
+                rows_after_filter=0,
+                rows_after_dedup=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                target_table=target_table,
+                per_currency_stats=per_currency_stats,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_fetched,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="rate_date",
+                watermark_column="rate_date",
+            )
+            return result
+
+        raw_df = spark.createDataFrame(records, schema=schema)
+        date_filtered_df = raw_df.filter(
+            (F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date))
+        )
+
+        dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
+            F.col("ingested_at").desc(),
+            F.col("payload_hash").desc(),
+        )
+
+        deduped_df = (
+            date_filtered_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
+
+        rows_after_dedup = deduped_df.count()
+        existing_key_count = (
+            deduped_df.select("base_currency", "quote_currency", "rate_date")
+            .join(
+                spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
+                on=["base_currency", "quote_currency", "rate_date"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            deduped_df.alias("src"),
+            "tgt.base_currency = src.base_currency "
+            "AND tgt.quote_currency = src.quote_currency "
+            "AND tgt.rate_date = src.rate_date",
+        ).whenMatchedUpdate(
+            set={
+                "rate": "src.rate",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+                "payload_hash": "src.payload_hash",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(deduped_df.orderBy("quote_currency", "rate_date"))
+
+        result = EcbBronzeIngestionResult(
+            status="success",
             mode=mode,
             quote_currencies=quote_currencies,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
             request_url=request_url,
             series_key=series_key,
-            rows_fetched=0,
-            rows_after_filter=0,
-            rows_after_dedup=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_fetched=rows_fetched,
+            rows_after_filter=rows_after_filter,
+            rows_after_dedup=rows_after_dedup,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_after_dedup - existing_key_count,
+            rows_merged=rows_after_dedup,
             run_id=run_id,
             target_table=target_table,
             per_currency_stats=per_currency_stats,
         )
-
-    raw_df = spark.createDataFrame(records, schema=schema)
-    date_filtered_df = raw_df.filter(
-        (F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date))
-    )
-
-    dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
-        F.col("ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
-
-    deduped_df = (
-        date_filtered_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
-
-    rows_after_dedup = deduped_df.count()
-    existing_key_count = (
-        deduped_df.select("base_currency", "quote_currency", "rate_date")
-        .join(
-            spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
-            on=["base_currency", "quote_currency", "rate_date"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_fetched,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="rate_date",
+            watermark_column="rate_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        deduped_df.alias("src"),
-        "tgt.base_currency = src.base_currency "
-        "AND tgt.quote_currency = src.quote_currency "
-        "AND tgt.rate_date = src.rate_date",
-    ).whenMatchedUpdate(
-        set={
-            "rate": "src.rate",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-            "payload_hash": "src.payload_hash",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(deduped_df.orderBy("quote_currency", "rate_date"))
-
-    return EcbBronzeIngestionResult(
-        status="success",
-        mode=mode,
-        quote_currencies=quote_currencies,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        request_url=request_url,
-        series_key=series_key,
-        rows_fetched=rows_fetched,
-        rows_after_filter=rows_after_filter,
-        rows_after_dedup=rows_after_dedup,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_after_dedup - existing_key_count,
-        rows_merged=rows_after_dedup,
-        run_id=run_id,
-        target_table=target_table,
-        per_currency_stats=per_currency_stats,
-    )
+        return result
 
 
 def run_fred_bronze_ingestion(
@@ -496,90 +567,201 @@ def run_fred_bronze_ingestion(
     ingested_at = datetime.now(UTC)
     metadata_schema = build_fred_metadata_schema()
     observation_schema = build_fred_bronze_schema()
-
-    print(
-        f"Fetching FRED series {','.join(series_ids)} "
-        f"from {start_date.isoformat()} to {end_date.isoformat()} in {mode} mode"
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=target_table.split(".", 1)[0],
+        pipeline_name="bronze_macro_fred_series",
+        layer="bronze",
+        source_name="fred",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "incremental_strategy": incremental_strategy,
+            "series_ids": series_ids,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "metadata_table": metadata_table,
+        },
     )
 
-    observation_records: list[dict[str, Any]] = []
-    metadata_records: list[dict[str, Any]] = []
-    per_series_stats: dict[str, FredSeriesIngestionStats] = {}
-    session = requests.Session()
+    with observer:
+        print(
+            f"Fetching FRED series {','.join(series_ids)} "
+            f"from {start_date.isoformat()} to {end_date.isoformat()} in {mode} mode"
+        )
 
-    try:
-        for series_id in series_ids:
-            metadata_records.append(
-                source.fetch_series_metadata(
+        observation_records: list[dict[str, Any]] = []
+        metadata_records: list[dict[str, Any]] = []
+        per_series_stats: dict[str, FredSeriesIngestionStats] = {}
+        session = requests.Session()
+
+        try:
+            for series_id in series_ids:
+                metadata_records.append(
+                    source.fetch_series_metadata(
+                        session=session,
+                        api_key=api_key,
+                        series_id=series_id,
+                        run_id=run_id,
+                        ingested_at=ingested_at,
+                    )
+                )
+
+                series_records, stats = source.fetch_series_observations(
                     session=session,
                     api_key=api_key,
                     series_id=series_id,
+                    start_date=start_date,
+                    end_date=end_date,
                     run_id=run_id,
                     ingested_at=ingested_at,
                 )
-            )
+                stats.metadata_fetched = 1
+                observation_records.extend(series_records)
+                per_series_stats[series_id] = stats
+                print(
+                    f"{series_id}: fetched={stats.api_rows_fetched} "
+                    f"pages={stats.request_pages}"
+                )
+        finally:
+            session.close()
 
-            series_records, stats = source.fetch_series_observations(
-                session=session,
-                api_key=api_key,
-                series_id=series_id,
-                start_date=start_date,
-                end_date=end_date,
-                run_id=run_id,
-                ingested_at=ingested_at,
+        metadata_df = spark.createDataFrame(metadata_records, schema=metadata_schema)
+        metadata_rows_merged = metadata_df.count()
+        metadata_existing_key_count = (
+            metadata_df.select("series_id")
+            .join(
+                spark.table(metadata_table).select("series_id"),
+                on=["series_id"],
+                how="inner",
             )
-            stats.metadata_fetched = 1
-            observation_records.extend(series_records)
-            per_series_stats[series_id] = stats
-            print(
-                f"{series_id}: fetched={stats.api_rows_fetched} "
-                f"pages={stats.request_pages}"
-            )
-    finally:
-        session.close()
-
-    metadata_df = spark.createDataFrame(metadata_records, schema=metadata_schema)
-    metadata_rows_merged = metadata_df.count()
-    metadata_existing_key_count = (
-        metadata_df.select("series_id")
-        .join(
-            spark.table(metadata_table).select("series_id"),
-            on=["series_id"],
-            how="inner",
+            .count()
         )
-        .count()
-    )
 
-    DeltaTable.forName(spark, metadata_table).alias("tgt").merge(
-        metadata_df.alias("src"),
-        "tgt.series_id = src.series_id",
-    ).whenMatchedUpdate(
-        set={
-            "title": "src.title",
-            "frequency": "src.frequency",
-            "frequency_short": "src.frequency_short",
-            "units": "src.units",
-            "units_short": "src.units_short",
-            "seasonal_adjustment": "src.seasonal_adjustment",
-            "seasonal_adjustment_short": "src.seasonal_adjustment_short",
-            "observation_start": "src.observation_start",
-            "observation_end": "src.observation_end",
-            "last_updated": "src.last_updated",
-            "notes": "src.notes",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-            "payload_hash": "src.payload_hash",
-        }
-    ).whenNotMatchedInsertAll().execute()
+        DeltaTable.forName(spark, metadata_table).alias("tgt").merge(
+            metadata_df.alias("src"),
+            "tgt.series_id = src.series_id",
+        ).whenMatchedUpdate(
+            set={
+                "title": "src.title",
+                "frequency": "src.frequency",
+                "frequency_short": "src.frequency_short",
+                "units": "src.units",
+                "units_short": "src.units_short",
+                "seasonal_adjustment": "src.seasonal_adjustment",
+                "seasonal_adjustment_short": "src.seasonal_adjustment_short",
+                "observation_start": "src.observation_start",
+                "observation_end": "src.observation_end",
+                "last_updated": "src.last_updated",
+                "notes": "src.notes",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+                "payload_hash": "src.payload_hash",
+            }
+        ).whenNotMatchedInsertAll().execute()
 
-    if display_fn is not None:
-        display_fn(metadata_df.orderBy("series_id"))
+        if display_fn is not None:
+            display_fn(metadata_df.orderBy("series_id"))
 
-    rows_fetched = sum(stats.api_rows_fetched for stats in per_series_stats.values())
+        rows_fetched = sum(stats.api_rows_fetched for stats in per_series_stats.values())
+        observer.update_progress(rows_read=rows_fetched)
 
-    if not observation_records:
-        return FredBronzeIngestionResult(
-            status="success_empty",
+        if not observation_records:
+            result = FredBronzeIngestionResult(
+                status="success_empty",
+                mode=mode,
+                incremental_strategy=incremental_strategy,
+                series_ids=series_ids,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                target_table=target_table,
+                metadata_table=metadata_table,
+                rows_fetched=0,
+                rows_after_filter=0,
+                rows_after_dedup=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                rows_metadata_to_update=metadata_existing_key_count,
+                rows_metadata_to_insert=metadata_rows_merged - metadata_existing_key_count,
+                rows_metadata_merged=metadata_rows_merged,
+                run_id=run_id,
+                per_series_stats=per_series_stats,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_fetched,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="observation_date",
+                watermark_column="observation_date",
+            )
+            return result
+
+        raw_df = spark.createDataFrame(observation_records, schema=observation_schema)
+        date_filtered_df = raw_df.filter(
+            (F.col("observation_date") >= F.lit(start_date))
+            & (F.col("observation_date") <= F.lit(end_date))
+        )
+        rows_after_filter = date_filtered_df.count()
+
+        dedup_window = Window.partitionBy(
+            "series_id",
+            "observation_date",
+            "realtime_start",
+            "realtime_end",
+        ).orderBy(
+            F.col("ingested_at").desc(),
+            F.col("payload_hash").desc(),
+        )
+
+        deduped_df = (
+            date_filtered_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
+        rows_after_dedup = deduped_df.count()
+
+        existing_key_count = (
+            deduped_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
+            .join(
+                spark.table(target_table).select(
+                    "series_id",
+                    "observation_date",
+                    "realtime_start",
+                    "realtime_end",
+                ),
+                on=["series_id", "observation_date", "realtime_start", "realtime_end"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            deduped_df.alias("src"),
+            "tgt.series_id = src.series_id "
+            "AND tgt.observation_date = src.observation_date "
+            "AND tgt.realtime_start = src.realtime_start "
+            "AND tgt.realtime_end = src.realtime_end",
+        ).whenMatchedUpdate(
+            set={
+                "value_raw": "src.value_raw",
+                "value": "src.value",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+                "payload_hash": "src.payload_hash",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(
+                deduped_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end")
+            )
+
+        result = FredBronzeIngestionResult(
+            status="success",
             mode=mode,
             incremental_strategy=incremental_strategy,
             series_ids=series_ids,
@@ -587,96 +769,24 @@ def run_fred_bronze_ingestion(
             end_date=end_date.isoformat(),
             target_table=target_table,
             metadata_table=metadata_table,
-            rows_fetched=0,
-            rows_after_filter=0,
-            rows_after_dedup=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_fetched=rows_fetched,
+            rows_after_filter=rows_after_filter,
+            rows_after_dedup=rows_after_dedup,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_after_dedup - existing_key_count,
+            rows_merged=rows_after_dedup,
             rows_metadata_to_update=metadata_existing_key_count,
             rows_metadata_to_insert=metadata_rows_merged - metadata_existing_key_count,
             rows_metadata_merged=metadata_rows_merged,
             run_id=run_id,
             per_series_stats=per_series_stats,
         )
-
-    raw_df = spark.createDataFrame(observation_records, schema=observation_schema)
-    date_filtered_df = raw_df.filter(
-        (F.col("observation_date") >= F.lit(start_date))
-        & (F.col("observation_date") <= F.lit(end_date))
-    )
-    rows_after_filter = date_filtered_df.count()
-
-    dedup_window = Window.partitionBy(
-        "series_id",
-        "observation_date",
-        "realtime_start",
-        "realtime_end",
-    ).orderBy(
-        F.col("ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
-
-    deduped_df = (
-        date_filtered_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
-    rows_after_dedup = deduped_df.count()
-
-    existing_key_count = (
-        deduped_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
-        .join(
-            spark.table(target_table).select(
-                "series_id",
-                "observation_date",
-                "realtime_start",
-                "realtime_end",
-            ),
-            on=["series_id", "observation_date", "realtime_start", "realtime_end"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_fetched,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="observation_date",
+            watermark_column="observation_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        deduped_df.alias("src"),
-        "tgt.series_id = src.series_id "
-        "AND tgt.observation_date = src.observation_date "
-        "AND tgt.realtime_start = src.realtime_start "
-        "AND tgt.realtime_end = src.realtime_end",
-    ).whenMatchedUpdate(
-        set={
-            "value_raw": "src.value_raw",
-            "value": "src.value",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-            "payload_hash": "src.payload_hash",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(deduped_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end"))
-
-    return FredBronzeIngestionResult(
-        status="success",
-        mode=mode,
-        incremental_strategy=incremental_strategy,
-        series_ids=series_ids,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        target_table=target_table,
-        metadata_table=metadata_table,
-        rows_fetched=rows_fetched,
-        rows_after_filter=rows_after_filter,
-        rows_after_dedup=rows_after_dedup,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_after_dedup - existing_key_count,
-        rows_merged=rows_after_dedup,
-        rows_metadata_to_update=metadata_existing_key_count,
-        rows_metadata_to_insert=metadata_rows_merged - metadata_existing_key_count,
-        rows_metadata_merged=metadata_rows_merged,
-        run_id=run_id,
-        per_series_stats=per_series_stats,
-    )
+        return result

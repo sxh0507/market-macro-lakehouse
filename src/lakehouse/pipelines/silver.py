@@ -11,6 +11,7 @@ from lakehouse.common.models import (
     SilverIngestionResult,
 )
 from lakehouse.common.runtime import UTC, parse_product_ids, parse_series_ids, resolve_date_window
+from lakehouse.observability import PipelineObserver
 from lakehouse.sources.ecb import EcbSource
 
 
@@ -66,145 +67,148 @@ def run_silver_crypto_ohlc_1d(
         raise RuntimeError(
             f"Quarantine table {quarantine_table} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
         )
-
-    bronze_df = (
-        spark.table(source_table)
-        .select(
-            "product_id",
-            "bar_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "source_window_start",
-            "source_window_end",
-            "ingested_at",
-            "run_id",
-            "payload_hash",
-        )
-        .filter(F.col("product_id").isin(product_ids))
-        .filter((F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date)))
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=catalog,
+        pipeline_name="silver_market_crypto_ohlc_1d",
+        layer="silver",
+        source_name="coinbase",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "product_ids": product_ids,
+            "source_table": source_table,
+            "quarantine_table": quarantine_table,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
     )
 
-    rows_read = bronze_df.count()
-    per_product_rows_read = collect_counts(bronze_df, "product_id", "rows_read") if rows_read else {}
-
-    if rows_read == 0:
-        return SilverIngestionResult(
-            status="success_empty",
-            mode=mode,
-            product_ids=product_ids,
-            start_date=start_date.isoformat(),
-            end_date=end_date.isoformat(),
-            source_table=source_table,
-            target_table=target_table,
-            quarantine_table=quarantine_table,
-            rows_read=0,
-            rows_after_dedup=0,
-            rows_structural_invalid=0,
-            rows_rejected=0,
-            rows_quarantined=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
-            run_id=run_id,
-            per_product_rows_read=per_product_rows_read,
+    with observer:
+        bronze_df = (
+            spark.table(source_table)
+            .select(
+                "product_id",
+                "bar_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "source_window_start",
+                "source_window_end",
+                "ingested_at",
+                "run_id",
+                "payload_hash",
+            )
+            .filter(F.col("product_id").isin(product_ids))
+            .filter((F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date)))
         )
 
-    dedup_window = Window.partitionBy("product_id", "bar_date").orderBy(
-        F.col("source_window_end").desc(),
-        F.col("ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
+        rows_read = bronze_df.count()
+        observer.update_progress(rows_read=rows_read)
+        per_product_rows_read = collect_counts(bronze_df, "product_id", "rows_read") if rows_read else {}
 
-    bronze_latest_df = (
-        bronze_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
+        if rows_read == 0:
+            result = SilverIngestionResult(
+                status="success_empty",
+                mode=mode,
+                product_ids=product_ids,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=0,
+                rows_after_dedup=0,
+                rows_structural_invalid=0,
+                rows_rejected=0,
+                rows_quarantined=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_product_rows_read=per_product_rows_read,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="bar_date",
+                watermark_column="bar_date",
+            )
+            return result
 
-    rows_after_dedup = bronze_latest_df.count()
-    per_product_rows_after_dedup = collect_counts(bronze_latest_df, "product_id", "rows_after_dedup")
-
-    product_parts = F.split(F.col("product_id"), "-")
-    structural_invalid_df = bronze_latest_df.filter(
-        F.col("product_id").isNull()
-        | F.col("bar_date").isNull()
-        | (F.size(product_parts) != 2)
-        | (F.element_at(product_parts, 1) == "")
-        | (F.element_at(product_parts, 2) == "")
-    )
-
-    rows_structural_invalid = structural_invalid_df.count()
-    if rows_structural_invalid > 0:
-        if display_fn is not None:
-            display_fn(structural_invalid_df.orderBy("product_id", "bar_date"))
-        raise RuntimeError(
-            f"Found {rows_structural_invalid} structurally invalid Bronze rows. Fix Bronze data before loading Silver."
+        dedup_window = Window.partitionBy("product_id", "bar_date").orderBy(
+            F.col("source_window_end").desc(),
+            F.col("ingested_at").desc(),
+            F.col("payload_hash").desc(),
         )
 
-    silver_ingested_at = datetime.now(UTC)
-    transformed_df = (
-        bronze_latest_df
-        .withColumn("base_asset", F.element_at(product_parts, 1))
-        .withColumn("quote_currency", F.element_at(product_parts, 2))
-    )
+        bronze_latest_df = (
+            bronze_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
 
-    dq_reason = (
-        F.when(F.col("open").isNull(), F.lit("open_null"))
-        .when(F.col("high").isNull(), F.lit("high_null"))
-        .when(F.col("low").isNull(), F.lit("low_null"))
-        .when(F.col("close").isNull(), F.lit("close_null"))
-        .when(F.col("volume").isNull(), F.lit("volume_null"))
-        .when(F.col("open") < 0, F.lit("open_negative"))
-        .when(F.col("high") < 0, F.lit("high_negative"))
-        .when(F.col("low") < 0, F.lit("low_negative"))
-        .when(F.col("close") < 0, F.lit("close_negative"))
-        .when(F.col("volume") < 0, F.lit("volume_negative"))
-        .when(F.col("high") < F.col("low"), F.lit("high_below_low"))
-        .when(F.col("open") < F.col("low"), F.lit("open_below_low"))
-        .when(F.col("open") > F.col("high"), F.lit("open_above_high"))
-        .when(F.col("close") < F.col("low"), F.lit("close_below_low"))
-        .when(F.col("close") > F.col("high"), F.lit("close_above_high"))
-    )
+        rows_after_dedup = bronze_latest_df.count()
+        per_product_rows_after_dedup = collect_counts(bronze_latest_df, "product_id", "rows_after_dedup")
 
-    assessed_df = transformed_df.withColumn("dq_reason", dq_reason)
-    rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
-    rows_rejected = rejected_df.count()
-    per_product_rows_rejected = (
-        collect_counts(rejected_df, "product_id", "rows_rejected") if rows_rejected else {}
-    )
+        product_parts = F.split(F.col("product_id"), "-")
+        structural_invalid_df = bronze_latest_df.filter(
+            F.col("product_id").isNull()
+            | F.col("bar_date").isNull()
+            | (F.size(product_parts) != 2)
+            | (F.element_at(product_parts, 1) == "")
+            | (F.element_at(product_parts, 2) == "")
+        )
 
-    quarantine_df = rejected_df.select(
-        F.lit(run_id).alias("run_id"),
-        "product_id",
-        "bar_date",
-        "base_asset",
-        "quote_currency",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "dq_reason",
-        "source_window_start",
-        "source_window_end",
-        F.col("ingested_at").alias("source_ingested_at"),
-        F.col("run_id").alias("source_run_id"),
-        "payload_hash",
-        F.lit(silver_ingested_at).alias("quarantined_at"),
-    )
+        rows_structural_invalid = structural_invalid_df.count()
+        if rows_structural_invalid > 0:
+            observer.update_progress(rows_read=rows_read)
+            if display_fn is not None:
+                display_fn(structural_invalid_df.orderBy("product_id", "bar_date"))
+            raise RuntimeError(
+                f"Found {rows_structural_invalid} structurally invalid Bronze rows. Fix Bronze data before loading Silver."
+            )
 
-    rows_quarantined = quarantine_df.count()
-    if rows_quarantined > 0:
-        quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+        silver_ingested_at = datetime.now(UTC)
+        transformed_df = (
+            bronze_latest_df
+            .withColumn("base_asset", F.element_at(product_parts, 1))
+            .withColumn("quote_currency", F.element_at(product_parts, 2))
+        )
 
-    valid_df = (
-        assessed_df
-        .filter(F.col("dq_reason").isNull())
-        .select(
+        dq_reason = (
+            F.when(F.col("open").isNull(), F.lit("open_null"))
+            .when(F.col("high").isNull(), F.lit("high_null"))
+            .when(F.col("low").isNull(), F.lit("low_null"))
+            .when(F.col("close").isNull(), F.lit("close_null"))
+            .when(F.col("volume").isNull(), F.lit("volume_null"))
+            .when(F.col("open") < 0, F.lit("open_negative"))
+            .when(F.col("high") < 0, F.lit("high_negative"))
+            .when(F.col("low") < 0, F.lit("low_negative"))
+            .when(F.col("close") < 0, F.lit("close_negative"))
+            .when(F.col("volume") < 0, F.lit("volume_negative"))
+            .when(F.col("high") < F.col("low"), F.lit("high_below_low"))
+            .when(F.col("open") < F.col("low"), F.lit("open_below_low"))
+            .when(F.col("open") > F.col("high"), F.lit("open_above_high"))
+            .when(F.col("close") < F.col("low"), F.lit("close_below_low"))
+            .when(F.col("close") > F.col("high"), F.lit("close_above_high"))
+        )
+
+        assessed_df = transformed_df.withColumn("dq_reason", dq_reason)
+        rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
+        rows_rejected = rejected_df.count()
+        per_product_rows_rejected = (
+            collect_counts(rejected_df, "product_id", "rows_rejected") if rows_rejected else {}
+        )
+
+        quarantine_df = rejected_df.select(
+            F.lit(run_id).alias("run_id"),
             "product_id",
             "bar_date",
             "base_asset",
@@ -214,20 +218,112 @@ def run_silver_crypto_ohlc_1d(
             "low",
             "close",
             "volume",
+            "dq_reason",
+            "source_window_start",
+            "source_window_end",
+            F.col("ingested_at").alias("source_ingested_at"),
+            F.col("run_id").alias("source_run_id"),
+            "payload_hash",
+            F.lit(silver_ingested_at).alias("quarantined_at"),
         )
-        .withColumn("ingested_at", F.lit(silver_ingested_at))
-        .withColumn("run_id", F.lit(run_id))
-    )
 
-    rows_valid = valid_df.count()
-    per_product_rows_merged = collect_counts(valid_df, "product_id", "rows_merged") if rows_valid else {}
+        rows_quarantined = quarantine_df.count()
+        if rows_quarantined > 0:
+            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
 
-    if rows_valid == 0:
-        if rows_quarantined > 0 and display_fn is not None:
-            display_fn(quarantine_df.orderBy("product_id", "bar_date", "dq_reason"))
+        valid_df = (
+            assessed_df
+            .filter(F.col("dq_reason").isNull())
+            .select(
+                "product_id",
+                "bar_date",
+                "base_asset",
+                "quote_currency",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+            )
+            .withColumn("ingested_at", F.lit(silver_ingested_at))
+            .withColumn("run_id", F.lit(run_id))
+        )
 
-        return SilverIngestionResult(
-            status="success_empty_valid",
+        rows_valid = valid_df.count()
+        per_product_rows_merged = (
+            collect_counts(valid_df, "product_id", "rows_merged") if rows_valid else {}
+        )
+
+        if rows_valid == 0:
+            if rows_quarantined > 0 and display_fn is not None:
+                display_fn(quarantine_df.orderBy("product_id", "bar_date", "dq_reason"))
+
+            result = SilverIngestionResult(
+                status="success_empty_valid",
+                mode=mode,
+                product_ids=product_ids,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=rows_read,
+                rows_after_dedup=rows_after_dedup,
+                rows_structural_invalid=0,
+                rows_rejected=rows_rejected,
+                rows_quarantined=rows_quarantined,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_product_rows_read=per_product_rows_read,
+                per_product_rows_after_dedup=per_product_rows_after_dedup,
+                per_product_rows_rejected=per_product_rows_rejected,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="bar_date",
+                watermark_column="bar_date",
+            )
+            return result
+
+        existing_key_count = (
+            valid_df.select("product_id", "bar_date")
+            .join(
+                spark.table(target_table).select("product_id", "bar_date"),
+                on=["product_id", "bar_date"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            valid_df.alias("src"),
+            "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
+        ).whenMatchedUpdate(
+            set={
+                "base_asset": "src.base_asset",
+                "quote_currency": "src.quote_currency",
+                "open": "src.open",
+                "high": "src.high",
+                "low": "src.low",
+                "close": "src.close",
+                "volume": "src.volume",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(valid_df.orderBy("product_id", "bar_date"))
+            if rows_quarantined > 0:
+                display_fn(quarantine_df.orderBy("product_id", "bar_date", "dq_reason"))
+
+        result = SilverIngestionResult(
+            status="success",
             mode=mode,
             product_ids=product_ids,
             start_date=start_date.isoformat(),
@@ -240,70 +336,24 @@ def run_silver_crypto_ohlc_1d(
             rows_structural_invalid=0,
             rows_rejected=rows_rejected,
             rows_quarantined=rows_quarantined,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_valid - existing_key_count,
+            rows_merged=rows_valid,
             run_id=run_id,
             per_product_rows_read=per_product_rows_read,
             per_product_rows_after_dedup=per_product_rows_after_dedup,
             per_product_rows_rejected=per_product_rows_rejected,
+            per_product_rows_merged=per_product_rows_merged,
         )
-
-    existing_key_count = (
-        valid_df.select("product_id", "bar_date")
-        .join(
-            spark.table(target_table).select("product_id", "bar_date"),
-            on=["product_id", "bar_date"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_read,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="bar_date",
+            watermark_column="bar_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        valid_df.alias("src"),
-        "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
-    ).whenMatchedUpdate(
-        set={
-            "base_asset": "src.base_asset",
-            "quote_currency": "src.quote_currency",
-            "open": "src.open",
-            "high": "src.high",
-            "low": "src.low",
-            "close": "src.close",
-            "volume": "src.volume",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(valid_df.orderBy("product_id", "bar_date"))
-        if rows_quarantined > 0:
-            display_fn(quarantine_df.orderBy("product_id", "bar_date", "dq_reason"))
-
-    return SilverIngestionResult(
-        status="success",
-        mode=mode,
-        product_ids=product_ids,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        source_table=source_table,
-        target_table=target_table,
-        quarantine_table=quarantine_table,
-        rows_read=rows_read,
-        rows_after_dedup=rows_after_dedup,
-        rows_structural_invalid=0,
-        rows_rejected=rows_rejected,
-        rows_quarantined=rows_quarantined,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_valid - existing_key_count,
-        rows_merged=rows_valid,
-        run_id=run_id,
-        per_product_rows_read=per_product_rows_read,
-        per_product_rows_after_dedup=per_product_rows_after_dedup,
-        per_product_rows_rejected=per_product_rows_rejected,
-        per_product_rows_merged=per_product_rows_merged,
-    )
+        return result
 
 
 def run_silver_ecb_fx_ref_rates_daily(
@@ -356,141 +406,230 @@ def run_silver_ecb_fx_ref_rates_daily(
         raise RuntimeError(
             f"Quarantine table {quarantine_table} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
         )
-
-    bronze_df = (
-        spark.table(source_table)
-        .select(
-            F.upper(F.col("base_currency")).alias("base_currency"),
-            F.upper(F.col("quote_currency")).alias("quote_currency"),
-            F.col("rate_date"),
-            F.col("rate"),
-            F.col("ingested_at").alias("source_ingested_at"),
-            F.col("run_id").alias("source_run_id"),
-            F.col("payload_hash"),
-        )
-        .filter(F.col("quote_currency").isin(quote_currencies))
-        .filter((F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date)))
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=catalog,
+        pipeline_name="silver_macro_ecb_fx_ref_rates_daily",
+        layer="silver",
+        source_name="ecb",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "quote_currencies": quote_currencies,
+            "source_table": source_table,
+            "quarantine_table": quarantine_table,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
     )
 
-    rows_read = bronze_df.count()
-    per_currency_rows_read = (
-        collect_counts(bronze_df, "quote_currency", "rows_read") if rows_read else {}
-    )
-
-    if rows_read == 0:
-        return EcbSilverIngestionResult(
-            status="success_empty",
-            source_system="ecb",
-            mode=mode,
-            quote_currencies=quote_currencies,
-            start_date=start_date.isoformat(),
-            end_date=end_date.isoformat(),
-            source_table=source_table,
-            target_table=target_table,
-            quarantine_table=quarantine_table,
-            rows_read=0,
-            rows_after_dedup=0,
-            rows_structural_invalid=0,
-            rows_rejected=0,
-            rows_quarantined=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
-            run_id=run_id,
-            per_currency_rows_read=per_currency_rows_read,
+    with observer:
+        bronze_df = (
+            spark.table(source_table)
+            .select(
+                F.upper(F.col("base_currency")).alias("base_currency"),
+                F.upper(F.col("quote_currency")).alias("quote_currency"),
+                F.col("rate_date"),
+                F.col("rate"),
+                F.col("ingested_at").alias("source_ingested_at"),
+                F.col("run_id").alias("source_run_id"),
+                F.col("payload_hash"),
+            )
+            .filter(F.col("quote_currency").isin(quote_currencies))
+            .filter((F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date)))
         )
 
-    dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
-        F.col("source_ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
-
-    bronze_latest_df = (
-        bronze_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
-
-    rows_after_dedup = bronze_latest_df.count()
-    per_currency_rows_after_dedup = collect_counts(
-        bronze_latest_df,
-        "quote_currency",
-        "rows_after_dedup",
-    )
-
-    structural_invalid_df = bronze_latest_df.filter(
-        F.col("base_currency").isNull()
-        | F.col("quote_currency").isNull()
-        | F.col("rate_date").isNull()
-        | (~F.col("base_currency").rlike("^[A-Z]{3}$"))
-        | (~F.col("quote_currency").rlike("^[A-Z]{3}$"))
-        | (F.col("base_currency") != F.lit("EUR"))
-    )
-
-    rows_structural_invalid = structural_invalid_df.count()
-    if rows_structural_invalid > 0:
-        if display_fn is not None:
-            display_fn(structural_invalid_df.orderBy("quote_currency", "rate_date"))
-        raise RuntimeError(
-            f"Detected {rows_structural_invalid} structural-invalid ECB rows in Bronze. Silver load aborted."
+        rows_read = bronze_df.count()
+        observer.update_progress(rows_read=rows_read)
+        per_currency_rows_read = (
+            collect_counts(bronze_df, "quote_currency", "rows_read") if rows_read else {}
         )
 
-    silver_ingested_at = datetime.now(UTC)
+        if rows_read == 0:
+            result = EcbSilverIngestionResult(
+                status="success_empty",
+                source_system="ecb",
+                mode=mode,
+                quote_currencies=quote_currencies,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=0,
+                rows_after_dedup=0,
+                rows_structural_invalid=0,
+                rows_rejected=0,
+                rows_quarantined=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_currency_rows_read=per_currency_rows_read,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="rate_date",
+                watermark_column="rate_date",
+            )
+            return result
 
-    dq_reason = F.when(F.col("rate").isNull(), F.lit("rate_null")).when(
-        F.col("rate") <= F.lit(0),
-        F.lit("rate_non_positive"),
-    )
+        dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
+            F.col("source_ingested_at").desc(),
+            F.col("payload_hash").desc(),
+        )
 
-    assessed_df = bronze_latest_df.withColumn("dq_reason", dq_reason)
-    rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
-    rows_rejected = rejected_df.count()
-    per_currency_rows_rejected = (
-        collect_counts(rejected_df, "quote_currency", "rows_rejected") if rows_rejected else {}
-    )
+        bronze_latest_df = (
+            bronze_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
 
-    quarantine_df = rejected_df.select(
-        F.lit(run_id).alias("run_id"),
-        "base_currency",
-        "quote_currency",
-        "rate_date",
-        "rate",
-        "dq_reason",
-        "source_ingested_at",
-        "source_run_id",
-        "payload_hash",
-        F.lit(silver_ingested_at).alias("quarantined_at"),
-    )
+        rows_after_dedup = bronze_latest_df.count()
+        per_currency_rows_after_dedup = collect_counts(
+            bronze_latest_df,
+            "quote_currency",
+            "rows_after_dedup",
+        )
 
-    rows_quarantined = quarantine_df.count()
-    if rows_quarantined > 0:
-        quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+        structural_invalid_df = bronze_latest_df.filter(
+            F.col("base_currency").isNull()
+            | F.col("quote_currency").isNull()
+            | F.col("rate_date").isNull()
+            | (~F.col("base_currency").rlike("^[A-Z]{3}$"))
+            | (~F.col("quote_currency").rlike("^[A-Z]{3}$"))
+            | (F.col("base_currency") != F.lit("EUR"))
+        )
 
-    valid_df = (
-        assessed_df
-        .filter(F.col("dq_reason").isNull())
-        .select(
+        rows_structural_invalid = structural_invalid_df.count()
+        if rows_structural_invalid > 0:
+            if display_fn is not None:
+                display_fn(structural_invalid_df.orderBy("quote_currency", "rate_date"))
+            raise RuntimeError(
+                f"Detected {rows_structural_invalid} structural-invalid ECB rows in Bronze. Silver load aborted."
+            )
+
+        silver_ingested_at = datetime.now(UTC)
+
+        dq_reason = F.when(F.col("rate").isNull(), F.lit("rate_null")).when(
+            F.col("rate") <= F.lit(0),
+            F.lit("rate_non_positive"),
+        )
+
+        assessed_df = bronze_latest_df.withColumn("dq_reason", dq_reason)
+        rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
+        rows_rejected = rejected_df.count()
+        per_currency_rows_rejected = (
+            collect_counts(rejected_df, "quote_currency", "rows_rejected") if rows_rejected else {}
+        )
+
+        quarantine_df = rejected_df.select(
+            F.lit(run_id).alias("run_id"),
             "base_currency",
             "quote_currency",
             "rate_date",
             "rate",
+            "dq_reason",
+            "source_ingested_at",
+            "source_run_id",
+            "payload_hash",
+            F.lit(silver_ingested_at).alias("quarantined_at"),
         )
-        .withColumn("ingested_at", F.lit(silver_ingested_at))
-        .withColumn("run_id", F.lit(run_id))
-    )
 
-    rows_valid = valid_df.count()
-    per_currency_rows_merged = (
-        collect_counts(valid_df, "quote_currency", "rows_merged") if rows_valid else {}
-    )
+        rows_quarantined = quarantine_df.count()
+        if rows_quarantined > 0:
+            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
 
-    if rows_valid == 0:
-        if rows_quarantined > 0 and display_fn is not None:
-            display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+        valid_df = (
+            assessed_df
+            .filter(F.col("dq_reason").isNull())
+            .select(
+                "base_currency",
+                "quote_currency",
+                "rate_date",
+                "rate",
+            )
+            .withColumn("ingested_at", F.lit(silver_ingested_at))
+            .withColumn("run_id", F.lit(run_id))
+        )
 
-        return EcbSilverIngestionResult(
-            status="success_empty_valid",
+        rows_valid = valid_df.count()
+        per_currency_rows_merged = (
+            collect_counts(valid_df, "quote_currency", "rows_merged") if rows_valid else {}
+        )
+
+        if rows_valid == 0:
+            if rows_quarantined > 0 and display_fn is not None:
+                display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+
+            result = EcbSilverIngestionResult(
+                status="success_empty_valid",
+                source_system="ecb",
+                mode=mode,
+                quote_currencies=quote_currencies,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=rows_read,
+                rows_after_dedup=rows_after_dedup,
+                rows_structural_invalid=0,
+                rows_rejected=rows_rejected,
+                rows_quarantined=rows_quarantined,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_currency_rows_read=per_currency_rows_read,
+                per_currency_rows_after_dedup=per_currency_rows_after_dedup,
+                per_currency_rows_rejected=per_currency_rows_rejected,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="rate_date",
+                watermark_column="rate_date",
+            )
+            return result
+
+        existing_key_count = (
+            valid_df.select("base_currency", "quote_currency", "rate_date")
+            .join(
+                spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
+                on=["base_currency", "quote_currency", "rate_date"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            valid_df.alias("src"),
+            "tgt.base_currency = src.base_currency "
+            "AND tgt.quote_currency = src.quote_currency "
+            "AND tgt.rate_date = src.rate_date",
+        ).whenMatchedUpdate(
+            set={
+                "rate": "src.rate",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(valid_df.orderBy("quote_currency", "rate_date"))
+            if rows_quarantined > 0:
+                display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+
+        result = EcbSilverIngestionResult(
+            status="success",
             source_system="ecb",
             mode=mode,
             quote_currencies=quote_currencies,
@@ -504,67 +643,24 @@ def run_silver_ecb_fx_ref_rates_daily(
             rows_structural_invalid=0,
             rows_rejected=rows_rejected,
             rows_quarantined=rows_quarantined,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_valid - existing_key_count,
+            rows_merged=rows_valid,
             run_id=run_id,
             per_currency_rows_read=per_currency_rows_read,
             per_currency_rows_after_dedup=per_currency_rows_after_dedup,
             per_currency_rows_rejected=per_currency_rows_rejected,
+            per_currency_rows_merged=per_currency_rows_merged,
         )
-
-    existing_key_count = (
-        valid_df.select("base_currency", "quote_currency", "rate_date")
-        .join(
-            spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
-            on=["base_currency", "quote_currency", "rate_date"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_read,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="rate_date",
+            watermark_column="rate_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        valid_df.alias("src"),
-        "tgt.base_currency = src.base_currency "
-        "AND tgt.quote_currency = src.quote_currency "
-        "AND tgt.rate_date = src.rate_date",
-    ).whenMatchedUpdate(
-        set={
-            "rate": "src.rate",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(valid_df.orderBy("quote_currency", "rate_date"))
-        if rows_quarantined > 0:
-            display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
-
-    return EcbSilverIngestionResult(
-        status="success",
-        source_system="ecb",
-        mode=mode,
-        quote_currencies=quote_currencies,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        source_table=source_table,
-        target_table=target_table,
-        quarantine_table=quarantine_table,
-        rows_read=rows_read,
-        rows_after_dedup=rows_after_dedup,
-        rows_structural_invalid=0,
-        rows_rejected=rows_rejected,
-        rows_quarantined=rows_quarantined,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_valid - existing_key_count,
-        rows_merged=rows_valid,
-        run_id=run_id,
-        per_currency_rows_read=per_currency_rows_read,
-        per_currency_rows_after_dedup=per_currency_rows_after_dedup,
-        per_currency_rows_rejected=per_currency_rows_rejected,
-        per_currency_rows_merged=per_currency_rows_merged,
-    )
+        return result
 
 
 def run_silver_fred_series_clean(
@@ -609,170 +705,276 @@ def run_silver_fred_series_clean(
             raise RuntimeError(
                 f"Required table {table_name} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
             )
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=catalog,
+        pipeline_name="silver_macro_fred_series_clean",
+        layer="silver",
+        source_name="fred",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": mode,
+            "series_ids": series_ids,
+            "source_table": source_table,
+            "metadata_table": metadata_table,
+            "quarantine_table": quarantine_table,
+            "dedup_strategy": dedup_strategy,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
+    )
 
-    bronze_df = (
-        spark.table(source_table)
-        .select(
+    with observer:
+        bronze_df = (
+            spark.table(source_table)
+            .select(
+                "series_id",
+                "observation_date",
+                "realtime_start",
+                "realtime_end",
+                "value_raw",
+                "value",
+                F.col("ingested_at").alias("source_ingested_at"),
+                F.col("run_id").alias("source_run_id"),
+                "payload_hash",
+            )
+            .filter(F.col("series_id").isin(series_ids))
+            .filter(
+                (F.col("observation_date") >= F.lit(start_date))
+                & (F.col("observation_date") <= F.lit(end_date))
+            )
+        )
+
+        available_metadata_ids = {
+            row["series_id"]
+            for row in (
+                spark.table(metadata_table)
+                .select("series_id")
+                .filter(F.col("series_id").isin(series_ids))
+                .dropDuplicates()
+                .collect()
+            )
+        }
+        missing_metadata_ids = sorted(set(series_ids) - available_metadata_ids)
+        metadata_complete = len(missing_metadata_ids) == 0
+
+        rows_read = bronze_df.count()
+        observer.update_progress(rows_read=rows_read)
+        per_series_rows_read = collect_counts(bronze_df, "series_id", "rows_read") if rows_read else {}
+
+        if rows_read == 0:
+            result = FredSilverIngestionResult(
+                status="success_empty",
+                source_system="fred",
+                mode=mode,
+                dedup_strategy=dedup_strategy,
+                series_ids=series_ids,
+                series_ids_missing_metadata=missing_metadata_ids,
+                metadata_complete=metadata_complete,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                metadata_table=metadata_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=0,
+                rows_after_dedup=0,
+                rows_structural_invalid=0,
+                rows_rejected=0,
+                rows_quarantined=0,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_series_rows_read=per_series_rows_read,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="observation_date",
+                watermark_column="observation_date",
+            )
+            return result
+
+        dedup_window = Window.partitionBy(
+            "series_id",
+            "observation_date",
+            "realtime_start",
+            "realtime_end",
+        ).orderBy(
+            F.col("source_ingested_at").desc(),
+            F.col("payload_hash").desc(),
+        )
+
+        bronze_latest_df = (
+            bronze_df
+            .withColumn("_row_number", F.row_number().over(dedup_window))
+            .filter(F.col("_row_number") == 1)
+            .drop("_row_number")
+        )
+
+        rows_after_dedup = bronze_latest_df.count()
+        per_series_rows_after_dedup = collect_counts(
+            bronze_latest_df,
+            "series_id",
+            "rows_after_dedup",
+        )
+
+        if available_metadata_ids:
+            metadata_flags_df = (
+                spark.createDataFrame(
+                    [(series_id,) for series_id in sorted(available_metadata_ids)],
+                    "series_id string",
+                )
+                .withColumn("metadata_present", F.lit(True))
+            )
+            assessed_df = bronze_latest_df.join(metadata_flags_df, on="series_id", how="left")
+        else:
+            assessed_df = bronze_latest_df.withColumn("metadata_present", F.lit(None).cast("boolean"))
+
+        dq_reason = (
+            F.when(F.col("series_id").isNull(), F.lit("MISSING_SERIES_ID"))
+            .when(F.col("observation_date").isNull(), F.lit("MISSING_OBSERVATION_DATE"))
+            .when(F.col("realtime_start").isNull(), F.lit("MISSING_REALTIME_START"))
+            .when(F.col("realtime_end").isNull(), F.lit("MISSING_REALTIME_END"))
+            .when(F.col("realtime_start") > F.col("realtime_end"), F.lit("INVALID_REALTIME_ORDER"))
+            .when(F.col("metadata_present").isNull(), F.lit("MISSING_METADATA"))
+            .when(F.col("value").isNull(), F.lit("NULL_VALUE"))
+        )
+
+        assessed_df = assessed_df.withColumn("dq_reason", dq_reason)
+        rows_structural_invalid = assessed_df.filter(F.col("dq_reason").isin(structural_reasons)).count()
+
+        rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
+        rows_rejected = rejected_df.count()
+        per_series_rows_rejected = (
+            collect_counts(rejected_df, "series_id", "rows_rejected") if rows_rejected else {}
+        )
+
+        silver_ingested_at = datetime.now(UTC)
+        quarantine_df = rejected_df.select(
+            F.lit(run_id).alias("run_id"),
             "series_id",
             "observation_date",
             "realtime_start",
             "realtime_end",
             "value_raw",
             "value",
-            F.col("ingested_at").alias("source_ingested_at"),
-            F.col("run_id").alias("source_run_id"),
+            "dq_reason",
+            "source_ingested_at",
+            "source_run_id",
             "payload_hash",
-        )
-        .filter(F.col("series_id").isin(series_ids))
-        .filter(
-            (F.col("observation_date") >= F.lit(start_date))
-            & (F.col("observation_date") <= F.lit(end_date))
-        )
-    )
-
-    available_metadata_ids = {
-        row["series_id"]
-        for row in (
-            spark.table(metadata_table)
-            .select("series_id")
-            .filter(F.col("series_id").isin(series_ids))
-            .dropDuplicates()
-            .collect()
-        )
-    }
-    missing_metadata_ids = sorted(set(series_ids) - available_metadata_ids)
-    metadata_complete = len(missing_metadata_ids) == 0
-
-    rows_read = bronze_df.count()
-    per_series_rows_read = collect_counts(bronze_df, "series_id", "rows_read") if rows_read else {}
-
-    if rows_read == 0:
-        return FredSilverIngestionResult(
-            status="success_empty",
-            source_system="fred",
-            mode=mode,
-            dedup_strategy=dedup_strategy,
-            series_ids=series_ids,
-            series_ids_missing_metadata=missing_metadata_ids,
-            metadata_complete=metadata_complete,
-            start_date=start_date.isoformat(),
-            end_date=end_date.isoformat(),
-            source_table=source_table,
-            metadata_table=metadata_table,
-            target_table=target_table,
-            quarantine_table=quarantine_table,
-            rows_read=0,
-            rows_after_dedup=0,
-            rows_structural_invalid=0,
-            rows_rejected=0,
-            rows_quarantined=0,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
-            run_id=run_id,
-            per_series_rows_read=per_series_rows_read,
+            F.lit(silver_ingested_at).alias("quarantined_at"),
         )
 
-    dedup_window = Window.partitionBy(
-        "series_id",
-        "observation_date",
-        "realtime_start",
-        "realtime_end",
-    ).orderBy(
-        F.col("source_ingested_at").desc(),
-        F.col("payload_hash").desc(),
-    )
+        rows_quarantined = quarantine_df.count()
+        if rows_quarantined > 0:
+            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
 
-    bronze_latest_df = (
-        bronze_df
-        .withColumn("_row_number", F.row_number().over(dedup_window))
-        .filter(F.col("_row_number") == 1)
-        .drop("_row_number")
-    )
-
-    rows_after_dedup = bronze_latest_df.count()
-    per_series_rows_after_dedup = collect_counts(
-        bronze_latest_df,
-        "series_id",
-        "rows_after_dedup",
-    )
-
-    if available_metadata_ids:
-        metadata_flags_df = (
-            spark.createDataFrame(
-                [(series_id,) for series_id in sorted(available_metadata_ids)],
-                "series_id string",
+        valid_df = (
+            assessed_df
+            .filter(F.col("dq_reason").isNull())
+            .select(
+                "series_id",
+                "observation_date",
+                "realtime_start",
+                "realtime_end",
+                "value",
             )
-            .withColumn("metadata_present", F.lit(True))
+            .withColumn("ingested_at", F.lit(silver_ingested_at))
+            .withColumn("run_id", F.lit(run_id))
         )
-        assessed_df = bronze_latest_df.join(metadata_flags_df, on="series_id", how="left")
-    else:
-        assessed_df = bronze_latest_df.withColumn("metadata_present", F.lit(None).cast("boolean"))
 
-    dq_reason = (
-        F.when(F.col("series_id").isNull(), F.lit("MISSING_SERIES_ID"))
-        .when(F.col("observation_date").isNull(), F.lit("MISSING_OBSERVATION_DATE"))
-        .when(F.col("realtime_start").isNull(), F.lit("MISSING_REALTIME_START"))
-        .when(F.col("realtime_end").isNull(), F.lit("MISSING_REALTIME_END"))
-        .when(F.col("realtime_start") > F.col("realtime_end"), F.lit("INVALID_REALTIME_ORDER"))
-        .when(F.col("metadata_present").isNull(), F.lit("MISSING_METADATA"))
-        .when(F.col("value").isNull(), F.lit("NULL_VALUE"))
-    )
-
-    assessed_df = assessed_df.withColumn("dq_reason", dq_reason)
-    rows_structural_invalid = assessed_df.filter(F.col("dq_reason").isin(structural_reasons)).count()
-
-    rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
-    rows_rejected = rejected_df.count()
-    per_series_rows_rejected = (
-        collect_counts(rejected_df, "series_id", "rows_rejected") if rows_rejected else {}
-    )
-
-    silver_ingested_at = datetime.now(UTC)
-    quarantine_df = rejected_df.select(
-        F.lit(run_id).alias("run_id"),
-        "series_id",
-        "observation_date",
-        "realtime_start",
-        "realtime_end",
-        "value_raw",
-        "value",
-        "dq_reason",
-        "source_ingested_at",
-        "source_run_id",
-        "payload_hash",
-        F.lit(silver_ingested_at).alias("quarantined_at"),
-    )
-
-    rows_quarantined = quarantine_df.count()
-    if rows_quarantined > 0:
-        quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
-
-    valid_df = (
-        assessed_df
-        .filter(F.col("dq_reason").isNull())
-        .select(
-            "series_id",
-            "observation_date",
-            "realtime_start",
-            "realtime_end",
-            "value",
+        rows_valid = valid_df.count()
+        per_series_rows_merged = (
+            collect_counts(valid_df, "series_id", "rows_merged") if rows_valid else {}
         )
-        .withColumn("ingested_at", F.lit(silver_ingested_at))
-        .withColumn("run_id", F.lit(run_id))
-    )
 
-    rows_valid = valid_df.count()
-    per_series_rows_merged = (
-        collect_counts(valid_df, "series_id", "rows_merged") if rows_valid else {}
-    )
+        if rows_valid == 0:
+            if rows_quarantined > 0 and display_fn is not None:
+                display_fn(
+                    quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason")
+                )
 
-    if rows_valid == 0:
-        if rows_quarantined > 0 and display_fn is not None:
-            display_fn(quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason"))
+            result = FredSilverIngestionResult(
+                status="success_empty_valid",
+                source_system="fred",
+                mode=mode,
+                dedup_strategy=dedup_strategy,
+                series_ids=series_ids,
+                series_ids_missing_metadata=missing_metadata_ids,
+                metadata_complete=metadata_complete,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_table=source_table,
+                metadata_table=metadata_table,
+                target_table=target_table,
+                quarantine_table=quarantine_table,
+                rows_read=rows_read,
+                rows_after_dedup=rows_after_dedup,
+                rows_structural_invalid=rows_structural_invalid,
+                rows_rejected=rows_rejected,
+                rows_quarantined=rows_quarantined,
+                rows_to_update=0,
+                rows_to_insert=0,
+                rows_merged=0,
+                run_id=run_id,
+                per_series_rows_read=per_series_rows_read,
+                per_series_rows_after_dedup=per_series_rows_after_dedup,
+                per_series_rows_rejected=per_series_rows_rejected,
+                per_series_rows_merged=per_series_rows_merged,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=result.rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="observation_date",
+                watermark_column="observation_date",
+            )
+            return result
 
-        return FredSilverIngestionResult(
-            status="success_empty_valid",
+        existing_key_count = (
+            valid_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
+            .join(
+                spark.table(target_table).select(
+                    "series_id",
+                    "observation_date",
+                    "realtime_start",
+                    "realtime_end",
+                ),
+                on=["series_id", "observation_date", "realtime_start", "realtime_end"],
+                how="inner",
+            )
+            .count()
+        )
+
+        DeltaTable.forName(spark, target_table).alias("tgt").merge(
+            valid_df.alias("src"),
+            "tgt.series_id = src.series_id "
+            "AND tgt.observation_date = src.observation_date "
+            "AND tgt.realtime_start = src.realtime_start "
+            "AND tgt.realtime_end = src.realtime_end",
+        ).whenMatchedUpdate(
+            set={
+                "value": "src.value",
+                "ingested_at": "src.ingested_at",
+                "run_id": "src.run_id",
+            }
+        ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(valid_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end"))
+            if rows_quarantined > 0:
+                display_fn(
+                    quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason")
+                )
+
+        result = FredSilverIngestionResult(
+            status="success",
             source_system="fred",
             mode=mode,
             dedup_strategy=dedup_strategy,
@@ -790,75 +992,21 @@ def run_silver_fred_series_clean(
             rows_structural_invalid=rows_structural_invalid,
             rows_rejected=rows_rejected,
             rows_quarantined=rows_quarantined,
-            rows_to_update=0,
-            rows_to_insert=0,
-            rows_merged=0,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_valid - existing_key_count,
+            rows_merged=rows_valid,
             run_id=run_id,
             per_series_rows_read=per_series_rows_read,
             per_series_rows_after_dedup=per_series_rows_after_dedup,
             per_series_rows_rejected=per_series_rows_rejected,
             per_series_rows_merged=per_series_rows_merged,
         )
-
-    existing_key_count = (
-        valid_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
-        .join(
-            spark.table(target_table).select(
-                "series_id",
-                "observation_date",
-                "realtime_start",
-                "realtime_end",
-            ),
-            on=["series_id", "observation_date", "realtime_start", "realtime_end"],
-            how="inner",
+        observer.succeed(
+            status=result.status,
+            rows_read=result.rows_read,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="observation_date",
+            watermark_column="observation_date",
         )
-        .count()
-    )
-
-    DeltaTable.forName(spark, target_table).alias("tgt").merge(
-        valid_df.alias("src"),
-        "tgt.series_id = src.series_id "
-        "AND tgt.observation_date = src.observation_date "
-        "AND tgt.realtime_start = src.realtime_start "
-        "AND tgt.realtime_end = src.realtime_end",
-    ).whenMatchedUpdate(
-        set={
-            "value": "src.value",
-            "ingested_at": "src.ingested_at",
-            "run_id": "src.run_id",
-        }
-    ).whenNotMatchedInsertAll().execute()
-
-    if display_fn is not None:
-        display_fn(valid_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end"))
-        if rows_quarantined > 0:
-            display_fn(quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason"))
-
-    return FredSilverIngestionResult(
-        status="success",
-        source_system="fred",
-        mode=mode,
-        dedup_strategy=dedup_strategy,
-        series_ids=series_ids,
-        series_ids_missing_metadata=missing_metadata_ids,
-        metadata_complete=metadata_complete,
-        start_date=start_date.isoformat(),
-        end_date=end_date.isoformat(),
-        source_table=source_table,
-        metadata_table=metadata_table,
-        target_table=target_table,
-        quarantine_table=quarantine_table,
-        rows_read=rows_read,
-        rows_after_dedup=rows_after_dedup,
-        rows_structural_invalid=rows_structural_invalid,
-        rows_rejected=rows_rejected,
-        rows_quarantined=rows_quarantined,
-        rows_to_update=existing_key_count,
-        rows_to_insert=rows_valid - existing_key_count,
-        rows_merged=rows_valid,
-        run_id=run_id,
-        per_series_rows_read=per_series_rows_read,
-        per_series_rows_after_dedup=per_series_rows_after_dedup,
-        per_series_rows_rejected=per_series_rows_rejected,
-        per_series_rows_merged=per_series_rows_merged,
-    )
+        return result
