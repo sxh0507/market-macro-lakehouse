@@ -7,11 +7,18 @@ from typing import Any, Callable
 
 import requests
 
-from lakehouse.common.models import BronzeIngestionResult, EcbBronzeIngestionResult, LoadResult
-from lakehouse.common.runtime import parse_product_ids, resolve_date_window
+from lakehouse.common.models import (
+    BronzeIngestionResult,
+    EcbBronzeIngestionResult,
+    FredBronzeIngestionResult,
+    FredSeriesIngestionStats,
+    LoadResult,
+)
+from lakehouse.common.runtime import UTC, parse_product_ids, parse_series_ids, resolve_date_window
 from lakehouse.sources.base import SourceAdapter
 from lakehouse.sources.coinbase import CoinbaseSource
 from lakehouse.sources.ecb import EcbSource
+from lakehouse.sources.fred import FredSource
 
 
 def run_bronze_ingestion(
@@ -81,6 +88,65 @@ def build_ecb_bronze_schema():
             StructField("quote_currency", StringType(), False),
             StructField("rate_date", DateType(), False),
             StructField("rate", DoubleType(), True),
+            StructField("ingested_at", TimestampType(), False),
+            StructField("run_id", StringType(), False),
+            StructField("payload_hash", StringType(), True),
+        ]
+    )
+
+
+def build_fred_bronze_schema():
+    """Build the Spark schema for the FRED Bronze observation table."""
+
+    from pyspark.sql.types import (  # type: ignore import-not-found
+        DateType,
+        DoubleType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
+    )
+
+    return StructType(
+        [
+            StructField("series_id", StringType(), False),
+            StructField("observation_date", DateType(), False),
+            StructField("realtime_start", DateType(), False),
+            StructField("realtime_end", DateType(), False),
+            StructField("value_raw", StringType(), True),
+            StructField("value", DoubleType(), True),
+            StructField("ingested_at", TimestampType(), False),
+            StructField("run_id", StringType(), False),
+            StructField("payload_hash", StringType(), True),
+        ]
+    )
+
+
+def build_fred_metadata_schema():
+    """Build the Spark schema for the FRED Bronze metadata sidecar table."""
+
+    from pyspark.sql.types import (  # type: ignore import-not-found
+        DateType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
+    )
+
+    return StructType(
+        [
+            StructField("series_id", StringType(), False),
+            StructField("title", StringType(), True),
+            StructField("frequency", StringType(), True),
+            StructField("frequency_short", StringType(), True),
+            StructField("units", StringType(), True),
+            StructField("units_short", StringType(), True),
+            StructField("seasonal_adjustment", StringType(), True),
+            StructField("seasonal_adjustment_short", StringType(), True),
+            StructField("observation_start", DateType(), True),
+            StructField("observation_end", DateType(), True),
+            StructField("last_updated", StringType(), True),
+            StructField("notes", StringType(), True),
             StructField("ingested_at", TimestampType(), False),
             StructField("run_id", StringType(), False),
             StructField("payload_hash", StringType(), True),
@@ -379,4 +445,238 @@ def run_ecb_bronze_ingestion(
         run_id=run_id,
         target_table=target_table,
         per_currency_stats=per_currency_stats,
+    )
+
+
+def run_fred_bronze_ingestion(
+    spark: Any,
+    raw_series_ids: str,
+    mode: str,
+    start_date_raw: str,
+    end_date_raw: str,
+    lookback_days_raw: str,
+    run_id: str,
+    api_key: str,
+    target_table: str | None = None,
+    metadata_table: str | None = None,
+    display_fn: Callable[[Any], None] | None = None,
+    source: FredSource | None = None,
+) -> FredBronzeIngestionResult:
+    """Run the validated FRED Bronze notebook flow from package code."""
+
+    from delta.tables import DeltaTable  # type: ignore import-not-found
+    from pyspark.sql import functions as F  # type: ignore import-not-found
+    from pyspark.sql.window import Window  # type: ignore import-not-found
+
+    incremental_strategy = "observation-window re-pull for phase-1 correctness"
+    source = source or FredSource()
+    target_table = target_table or source.bronze_table
+    metadata_table = metadata_table or source.metadata_table
+
+    if not api_key:
+        raise ValueError("api_key is required for FRED Bronze ingestion")
+
+    for table_name in [target_table, metadata_table]:
+        if not spark.catalog.tableExists(table_name):
+            raise RuntimeError(
+                f"Required table {table_name} does not exist. "
+                "Run 00_platform_setup_catalog_schema.ipynb first."
+            )
+
+    target_columns = {field.name for field in spark.table(target_table).schema.fields}
+    if "value_raw" not in target_columns:
+        raise RuntimeError(
+            f"Target table {target_table} is using the old schema and is missing value_raw. "
+            "Drop market_macro.brz_macro.raw_fred_series, "
+            "rerun 00_platform_setup_catalog_schema.ipynb, then rerun this notebook."
+        )
+
+    series_ids = parse_series_ids(raw_series_ids)
+    start_date, end_date = resolve_date_window(mode, start_date_raw, end_date_raw, lookback_days_raw)
+    ingested_at = datetime.now(UTC)
+    metadata_schema = build_fred_metadata_schema()
+    observation_schema = build_fred_bronze_schema()
+
+    print(
+        f"Fetching FRED series {','.join(series_ids)} "
+        f"from {start_date.isoformat()} to {end_date.isoformat()} in {mode} mode"
+    )
+
+    observation_records: list[dict[str, Any]] = []
+    metadata_records: list[dict[str, Any]] = []
+    per_series_stats: dict[str, FredSeriesIngestionStats] = {}
+    session = requests.Session()
+
+    try:
+        for series_id in series_ids:
+            metadata_records.append(
+                source.fetch_series_metadata(
+                    session=session,
+                    api_key=api_key,
+                    series_id=series_id,
+                    run_id=run_id,
+                    ingested_at=ingested_at,
+                )
+            )
+
+            series_records, stats = source.fetch_series_observations(
+                session=session,
+                api_key=api_key,
+                series_id=series_id,
+                start_date=start_date,
+                end_date=end_date,
+                run_id=run_id,
+                ingested_at=ingested_at,
+            )
+            stats.metadata_fetched = 1
+            observation_records.extend(series_records)
+            per_series_stats[series_id] = stats
+            print(
+                f"{series_id}: fetched={stats.api_rows_fetched} "
+                f"pages={stats.request_pages}"
+            )
+    finally:
+        session.close()
+
+    metadata_df = spark.createDataFrame(metadata_records, schema=metadata_schema)
+    metadata_rows_merged = metadata_df.count()
+    metadata_existing_key_count = (
+        metadata_df.select("series_id")
+        .join(
+            spark.table(metadata_table).select("series_id"),
+            on=["series_id"],
+            how="inner",
+        )
+        .count()
+    )
+
+    DeltaTable.forName(spark, metadata_table).alias("tgt").merge(
+        metadata_df.alias("src"),
+        "tgt.series_id = src.series_id",
+    ).whenMatchedUpdate(
+        set={
+            "title": "src.title",
+            "frequency": "src.frequency",
+            "frequency_short": "src.frequency_short",
+            "units": "src.units",
+            "units_short": "src.units_short",
+            "seasonal_adjustment": "src.seasonal_adjustment",
+            "seasonal_adjustment_short": "src.seasonal_adjustment_short",
+            "observation_start": "src.observation_start",
+            "observation_end": "src.observation_end",
+            "last_updated": "src.last_updated",
+            "notes": "src.notes",
+            "ingested_at": "src.ingested_at",
+            "run_id": "src.run_id",
+            "payload_hash": "src.payload_hash",
+        }
+    ).whenNotMatchedInsertAll().execute()
+
+    if display_fn is not None:
+        display_fn(metadata_df.orderBy("series_id"))
+
+    rows_fetched = sum(stats.api_rows_fetched for stats in per_series_stats.values())
+
+    if not observation_records:
+        return FredBronzeIngestionResult(
+            status="success_empty",
+            mode=mode,
+            incremental_strategy=incremental_strategy,
+            series_ids=series_ids,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            target_table=target_table,
+            metadata_table=metadata_table,
+            rows_fetched=0,
+            rows_after_filter=0,
+            rows_after_dedup=0,
+            rows_to_update=0,
+            rows_to_insert=0,
+            rows_merged=0,
+            rows_metadata_to_update=metadata_existing_key_count,
+            rows_metadata_to_insert=metadata_rows_merged - metadata_existing_key_count,
+            rows_metadata_merged=metadata_rows_merged,
+            run_id=run_id,
+            per_series_stats=per_series_stats,
+        )
+
+    raw_df = spark.createDataFrame(observation_records, schema=observation_schema)
+    date_filtered_df = raw_df.filter(
+        (F.col("observation_date") >= F.lit(start_date))
+        & (F.col("observation_date") <= F.lit(end_date))
+    )
+    rows_after_filter = date_filtered_df.count()
+
+    dedup_window = Window.partitionBy(
+        "series_id",
+        "observation_date",
+        "realtime_start",
+        "realtime_end",
+    ).orderBy(
+        F.col("ingested_at").desc(),
+        F.col("payload_hash").desc(),
+    )
+
+    deduped_df = (
+        date_filtered_df
+        .withColumn("_row_number", F.row_number().over(dedup_window))
+        .filter(F.col("_row_number") == 1)
+        .drop("_row_number")
+    )
+    rows_after_dedup = deduped_df.count()
+
+    existing_key_count = (
+        deduped_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
+        .join(
+            spark.table(target_table).select(
+                "series_id",
+                "observation_date",
+                "realtime_start",
+                "realtime_end",
+            ),
+            on=["series_id", "observation_date", "realtime_start", "realtime_end"],
+            how="inner",
+        )
+        .count()
+    )
+
+    DeltaTable.forName(spark, target_table).alias("tgt").merge(
+        deduped_df.alias("src"),
+        "tgt.series_id = src.series_id "
+        "AND tgt.observation_date = src.observation_date "
+        "AND tgt.realtime_start = src.realtime_start "
+        "AND tgt.realtime_end = src.realtime_end",
+    ).whenMatchedUpdate(
+        set={
+            "value_raw": "src.value_raw",
+            "value": "src.value",
+            "ingested_at": "src.ingested_at",
+            "run_id": "src.run_id",
+            "payload_hash": "src.payload_hash",
+        }
+    ).whenNotMatchedInsertAll().execute()
+
+    if display_fn is not None:
+        display_fn(deduped_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end"))
+
+    return FredBronzeIngestionResult(
+        status="success",
+        mode=mode,
+        incremental_strategy=incremental_strategy,
+        series_ids=series_ids,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        target_table=target_table,
+        metadata_table=metadata_table,
+        rows_fetched=rows_fetched,
+        rows_after_filter=rows_after_filter,
+        rows_after_dedup=rows_after_dedup,
+        rows_to_update=existing_key_count,
+        rows_to_insert=rows_after_dedup - existing_key_count,
+        rows_merged=rows_after_dedup,
+        rows_metadata_to_update=metadata_existing_key_count,
+        rows_metadata_to_insert=metadata_rows_merged - metadata_existing_key_count,
+        rows_metadata_merged=metadata_rows_merged,
+        run_id=run_id,
+        per_series_stats=per_series_stats,
     )

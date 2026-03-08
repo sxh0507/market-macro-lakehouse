@@ -17,6 +17,16 @@ def parse_product_ids(raw_value: str) -> list[str]:
     return product_ids
 
 
+def parse_series_ids(raw_value: str) -> list[str]:
+    """Parse a comma-separated FRED series list into unique uppercase ids."""
+
+    series_ids = [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+    series_ids = list(dict.fromkeys(series_ids))
+    if not series_ids:
+        raise ValueError("series_ids cannot be empty")
+    return series_ids
+
+
 def parse_iso_date(field_name: str, raw_value: str) -> date:
     """Parse a YYYY-MM-DD widget value."""
 

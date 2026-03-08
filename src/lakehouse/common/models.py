@@ -129,6 +129,72 @@ class EcbBronzeIngestionResult:
 
 
 @dataclass(slots=True)
+class FredSeriesIngestionStats:
+    """Per-series API fetch statistics for FRED Bronze ingestion."""
+
+    api_rows_fetched: int = 0
+    request_pages: int = 0
+    metadata_fetched: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "api_rows_fetched": self.api_rows_fetched,
+            "request_pages": self.request_pages,
+            "metadata_fetched": self.metadata_fetched,
+        }
+
+
+@dataclass(slots=True)
+class FredBronzeIngestionResult:
+    """Structured result returned by the FRED Bronze pipeline."""
+
+    status: str
+    mode: str
+    incremental_strategy: str
+    series_ids: list[str]
+    start_date: str
+    end_date: str
+    target_table: str
+    metadata_table: str
+    rows_fetched: int
+    rows_after_filter: int
+    rows_after_dedup: int
+    rows_to_update: int
+    rows_to_insert: int
+    rows_merged: int
+    rows_metadata_to_update: int
+    rows_metadata_to_insert: int
+    rows_metadata_merged: int
+    run_id: str
+    per_series_stats: dict[str, FredSeriesIngestionStats] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "mode": self.mode,
+            "incremental_strategy": self.incremental_strategy,
+            "series_ids": self.series_ids,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "target_table": self.target_table,
+            "metadata_table": self.metadata_table,
+            "rows_fetched": self.rows_fetched,
+            "rows_after_filter": self.rows_after_filter,
+            "rows_after_dedup": self.rows_after_dedup,
+            "rows_to_update": self.rows_to_update,
+            "rows_to_insert": self.rows_to_insert,
+            "rows_merged": self.rows_merged,
+            "rows_metadata_to_update": self.rows_metadata_to_update,
+            "rows_metadata_to_insert": self.rows_metadata_to_insert,
+            "rows_metadata_merged": self.rows_metadata_merged,
+            "run_id": self.run_id,
+            "per_series_stats": {
+                series_id: stats.as_dict() for series_id, stats in self.per_series_stats.items()
+            },
+        }
+
+
+@dataclass(slots=True)
 class SilverIngestionResult:
     """Structured result returned by the Silver crypto OHLC pipeline."""
 
