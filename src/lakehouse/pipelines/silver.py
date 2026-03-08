@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from lakehouse.common.models import SilverIngestionResult
+from lakehouse.common.models import EcbSilverIngestionResult, SilverIngestionResult
 from lakehouse.common.runtime import UTC, parse_product_ids, resolve_date_window
+from lakehouse.sources.ecb import EcbSource
 
 
-def collect_product_counts(df: Any, count_alias: str) -> dict[str, int]:
-    """Collect row counts grouped by product_id into a Python dictionary."""
+def collect_counts(df: Any, key_column: str, count_alias: str) -> dict[str, int]:
+    """Collect row counts grouped by the requested key into a Python dictionary."""
 
     counts = (
-        df.groupBy("product_id")
+        df.groupBy(key_column)
         .count()
         .withColumnRenamed("count", count_alias)
         .collect()
     )
-    return {row["product_id"]: int(row[count_alias]) for row in counts}
+    return {row[key_column]: int(row[count_alias]) for row in counts}
 
 
 def run_silver_crypto_ohlc_1d(
@@ -83,7 +84,7 @@ def run_silver_crypto_ohlc_1d(
     )
 
     rows_read = bronze_df.count()
-    per_product_rows_read = collect_product_counts(bronze_df, "rows_read") if rows_read else {}
+    per_product_rows_read = collect_counts(bronze_df, "product_id", "rows_read") if rows_read else {}
 
     if rows_read == 0:
         return SilverIngestionResult(
@@ -121,7 +122,7 @@ def run_silver_crypto_ohlc_1d(
     )
 
     rows_after_dedup = bronze_latest_df.count()
-    per_product_rows_after_dedup = collect_product_counts(bronze_latest_df, "rows_after_dedup")
+    per_product_rows_after_dedup = collect_counts(bronze_latest_df, "product_id", "rows_after_dedup")
 
     product_parts = F.split(F.col("product_id"), "-")
     structural_invalid_df = bronze_latest_df.filter(
@@ -169,7 +170,7 @@ def run_silver_crypto_ohlc_1d(
     rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
     rows_rejected = rejected_df.count()
     per_product_rows_rejected = (
-        collect_product_counts(rejected_df, "rows_rejected") if rows_rejected else {}
+        collect_counts(rejected_df, "product_id", "rows_rejected") if rows_rejected else {}
     )
 
     quarantine_df = rejected_df.select(
@@ -215,7 +216,7 @@ def run_silver_crypto_ohlc_1d(
     )
 
     rows_valid = valid_df.count()
-    per_product_rows_merged = collect_product_counts(valid_df, "rows_merged") if rows_valid else {}
+    per_product_rows_merged = collect_counts(valid_df, "product_id", "rows_merged") if rows_valid else {}
 
     if rows_valid == 0:
         if rows_quarantined > 0 and display_fn is not None:
@@ -298,4 +299,265 @@ def run_silver_crypto_ohlc_1d(
         per_product_rows_after_dedup=per_product_rows_after_dedup,
         per_product_rows_rejected=per_product_rows_rejected,
         per_product_rows_merged=per_product_rows_merged,
+    )
+
+
+def run_silver_ecb_fx_ref_rates_daily(
+    spark: Any,
+    raw_quote_currencies: str,
+    mode: str,
+    start_date_raw: str,
+    end_date_raw: str,
+    lookback_days_raw: str,
+    run_id: str,
+    catalog: str = "market_macro",
+    source_table: str | None = None,
+    target_table: str | None = None,
+    quarantine_table: str | None = None,
+    display_fn: Callable[[Any], None] | None = None,
+    source: EcbSource | None = None,
+) -> EcbSilverIngestionResult:
+    """Run the validated Silver ECB FX flow from package code."""
+
+    from delta.tables import DeltaTable  # type: ignore import-not-found
+    from pyspark.sql import functions as F  # type: ignore import-not-found
+    from pyspark.sql.window import Window  # type: ignore import-not-found
+
+    source = source or EcbSource()
+    quote_currencies = source.parse_quote_currencies(raw_quote_currencies)
+    latest_complete_date = datetime.now(source.local_timezone).date() - timedelta(days=1)
+    start_date, end_date = resolve_date_window(
+        mode,
+        start_date_raw,
+        end_date_raw,
+        lookback_days_raw,
+        latest_complete_date=latest_complete_date,
+        latest_complete_timezone_label="Europe/Berlin",
+    )
+    source_table = source_table or f"{catalog}.brz_macro.raw_ecb_fx_ref_rates_daily"
+    target_table = target_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily"
+    quarantine_table = quarantine_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily_quarantine"
+
+    if not spark.catalog.tableExists(source_table):
+        raise RuntimeError(
+            f"Source table {source_table} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
+        )
+
+    if not spark.catalog.tableExists(target_table):
+        raise RuntimeError(
+            f"Target table {target_table} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
+        )
+
+    if not spark.catalog.tableExists(quarantine_table):
+        raise RuntimeError(
+            f"Quarantine table {quarantine_table} does not exist. Run 00_platform_setup_catalog_schema.ipynb first."
+        )
+
+    bronze_df = (
+        spark.table(source_table)
+        .select(
+            F.upper(F.col("base_currency")).alias("base_currency"),
+            F.upper(F.col("quote_currency")).alias("quote_currency"),
+            F.col("rate_date"),
+            F.col("rate"),
+            F.col("ingested_at").alias("source_ingested_at"),
+            F.col("run_id").alias("source_run_id"),
+            F.col("payload_hash"),
+        )
+        .filter(F.col("quote_currency").isin(quote_currencies))
+        .filter((F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date)))
+    )
+
+    rows_read = bronze_df.count()
+    per_currency_rows_read = (
+        collect_counts(bronze_df, "quote_currency", "rows_read") if rows_read else {}
+    )
+
+    if rows_read == 0:
+        return EcbSilverIngestionResult(
+            status="success_empty",
+            source_system="ecb",
+            mode=mode,
+            quote_currencies=quote_currencies,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            source_table=source_table,
+            target_table=target_table,
+            quarantine_table=quarantine_table,
+            rows_read=0,
+            rows_after_dedup=0,
+            rows_structural_invalid=0,
+            rows_rejected=0,
+            rows_quarantined=0,
+            rows_to_update=0,
+            rows_to_insert=0,
+            rows_merged=0,
+            run_id=run_id,
+            per_currency_rows_read=per_currency_rows_read,
+        )
+
+    dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
+        F.col("source_ingested_at").desc(),
+        F.col("payload_hash").desc(),
+    )
+
+    bronze_latest_df = (
+        bronze_df
+        .withColumn("_row_number", F.row_number().over(dedup_window))
+        .filter(F.col("_row_number") == 1)
+        .drop("_row_number")
+    )
+
+    rows_after_dedup = bronze_latest_df.count()
+    per_currency_rows_after_dedup = collect_counts(
+        bronze_latest_df,
+        "quote_currency",
+        "rows_after_dedup",
+    )
+
+    structural_invalid_df = bronze_latest_df.filter(
+        F.col("base_currency").isNull()
+        | F.col("quote_currency").isNull()
+        | F.col("rate_date").isNull()
+        | (~F.col("base_currency").rlike("^[A-Z]{3}$"))
+        | (~F.col("quote_currency").rlike("^[A-Z]{3}$"))
+        | (F.col("base_currency") != F.lit("EUR"))
+    )
+
+    rows_structural_invalid = structural_invalid_df.count()
+    if rows_structural_invalid > 0:
+        if display_fn is not None:
+            display_fn(structural_invalid_df.orderBy("quote_currency", "rate_date"))
+        raise RuntimeError(
+            f"Detected {rows_structural_invalid} structural-invalid ECB rows in Bronze. Silver load aborted."
+        )
+
+    silver_ingested_at = datetime.now(UTC)
+
+    dq_reason = F.when(F.col("rate").isNull(), F.lit("rate_null")).when(
+        F.col("rate") <= F.lit(0),
+        F.lit("rate_non_positive"),
+    )
+
+    assessed_df = bronze_latest_df.withColumn("dq_reason", dq_reason)
+    rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
+    rows_rejected = rejected_df.count()
+    per_currency_rows_rejected = (
+        collect_counts(rejected_df, "quote_currency", "rows_rejected") if rows_rejected else {}
+    )
+
+    quarantine_df = rejected_df.select(
+        F.lit(run_id).alias("run_id"),
+        "base_currency",
+        "quote_currency",
+        "rate_date",
+        "rate",
+        "dq_reason",
+        "source_ingested_at",
+        "source_run_id",
+        "payload_hash",
+        F.lit(silver_ingested_at).alias("quarantined_at"),
+    )
+
+    rows_quarantined = quarantine_df.count()
+    if rows_quarantined > 0:
+        quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+
+    valid_df = (
+        assessed_df
+        .filter(F.col("dq_reason").isNull())
+        .select(
+            "base_currency",
+            "quote_currency",
+            "rate_date",
+            "rate",
+        )
+        .withColumn("ingested_at", F.lit(silver_ingested_at))
+        .withColumn("run_id", F.lit(run_id))
+    )
+
+    rows_valid = valid_df.count()
+    per_currency_rows_merged = (
+        collect_counts(valid_df, "quote_currency", "rows_merged") if rows_valid else {}
+    )
+
+    if rows_valid == 0:
+        if rows_quarantined > 0 and display_fn is not None:
+            display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+
+        return EcbSilverIngestionResult(
+            status="success_empty_valid",
+            source_system="ecb",
+            mode=mode,
+            quote_currencies=quote_currencies,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            source_table=source_table,
+            target_table=target_table,
+            quarantine_table=quarantine_table,
+            rows_read=rows_read,
+            rows_after_dedup=rows_after_dedup,
+            rows_structural_invalid=0,
+            rows_rejected=rows_rejected,
+            rows_quarantined=rows_quarantined,
+            rows_to_update=0,
+            rows_to_insert=0,
+            rows_merged=0,
+            run_id=run_id,
+            per_currency_rows_read=per_currency_rows_read,
+            per_currency_rows_after_dedup=per_currency_rows_after_dedup,
+            per_currency_rows_rejected=per_currency_rows_rejected,
+        )
+
+    existing_key_count = (
+        valid_df.select("base_currency", "quote_currency", "rate_date")
+        .join(
+            spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
+            on=["base_currency", "quote_currency", "rate_date"],
+            how="inner",
+        )
+        .count()
+    )
+
+    DeltaTable.forName(spark, target_table).alias("tgt").merge(
+        valid_df.alias("src"),
+        "tgt.base_currency = src.base_currency "
+        "AND tgt.quote_currency = src.quote_currency "
+        "AND tgt.rate_date = src.rate_date",
+    ).whenMatchedUpdate(
+        set={
+            "rate": "src.rate",
+            "ingested_at": "src.ingested_at",
+            "run_id": "src.run_id",
+        }
+    ).whenNotMatchedInsertAll().execute()
+
+    if display_fn is not None:
+        display_fn(valid_df.orderBy("quote_currency", "rate_date"))
+        if rows_quarantined > 0:
+            display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+
+    return EcbSilverIngestionResult(
+        status="success",
+        source_system="ecb",
+        mode=mode,
+        quote_currencies=quote_currencies,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        source_table=source_table,
+        target_table=target_table,
+        quarantine_table=quarantine_table,
+        rows_read=rows_read,
+        rows_after_dedup=rows_after_dedup,
+        rows_structural_invalid=0,
+        rows_rejected=rows_rejected,
+        rows_quarantined=rows_quarantined,
+        rows_to_update=existing_key_count,
+        rows_to_insert=rows_valid - existing_key_count,
+        rows_merged=rows_valid,
+        run_id=run_id,
+        per_currency_rows_read=per_currency_rows_read,
+        per_currency_rows_after_dedup=per_currency_rows_after_dedup,
+        per_currency_rows_rejected=per_currency_rows_rejected,
+        per_currency_rows_merged=per_currency_rows_merged,
     )
