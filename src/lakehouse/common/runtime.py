@@ -31,10 +31,12 @@ def resolve_date_window(
     start_date_raw: str,
     end_date_raw: str,
     lookback_days_raw: str,
+    latest_complete_date: date | None = None,
+    latest_complete_timezone_label: str = "UTC",
 ) -> tuple[date, date]:
     """Resolve the inclusive ingestion window for backfill or incremental mode."""
 
-    latest_complete_date = datetime.now(UTC).date() - timedelta(days=1)
+    latest_complete_date = latest_complete_date or (datetime.now(UTC).date() - timedelta(days=1))
 
     if mode not in {"backfill", "incremental"}:
         raise ValueError("mode must be either 'backfill' or 'incremental'")
@@ -62,7 +64,8 @@ def resolve_date_window(
 
     if end_date > latest_complete_date:
         raise ValueError(
-            f"end_date must be <= latest completed UTC day: {latest_complete_date.isoformat()}"
+            "end_date must be <= latest completed "
+            f"{latest_complete_timezone_label} day: {latest_complete_date.isoformat()}"
         )
 
     return start_date, end_date

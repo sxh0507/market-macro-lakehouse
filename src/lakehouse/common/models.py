@@ -28,7 +28,7 @@ class LoadResult:
 
 @dataclass(slots=True)
 class ProductIngestionStats:
-    """Per-product API fetch statistics for Bronze ingestion."""
+    """Per-identifier API fetch statistics for Bronze ingestion."""
 
     api_rows_fetched: int = 0
     rows_in_requested_range: int = 0
@@ -79,6 +79,51 @@ class BronzeIngestionResult:
             "per_product_stats": {
                 product_id: stats.as_dict()
                 for product_id, stats in self.per_product_stats.items()
+            },
+        }
+
+
+@dataclass(slots=True)
+class EcbBronzeIngestionResult:
+    """Structured result returned by the ECB Bronze pipeline."""
+
+    status: str
+    mode: str
+    quote_currencies: list[str]
+    start_date: str
+    end_date: str
+    request_url: str
+    series_key: str
+    rows_fetched: int
+    rows_after_filter: int
+    rows_after_dedup: int
+    rows_to_update: int
+    rows_to_insert: int
+    rows_merged: int
+    run_id: str
+    target_table: str
+    per_currency_stats: dict[str, ProductIngestionStats] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "mode": self.mode,
+            "quote_currencies": self.quote_currencies,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "request_url": self.request_url,
+            "series_key": self.series_key,
+            "rows_fetched": self.rows_fetched,
+            "rows_after_filter": self.rows_after_filter,
+            "rows_after_dedup": self.rows_after_dedup,
+            "rows_to_update": self.rows_to_update,
+            "rows_to_insert": self.rows_to_insert,
+            "rows_merged": self.rows_merged,
+            "run_id": self.run_id,
+            "target_table": self.target_table,
+            "per_currency_stats": {
+                quote_currency: stats.as_dict()
+                for quote_currency, stats in self.per_currency_stats.items()
             },
         }
 
