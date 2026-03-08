@@ -17,6 +17,21 @@ def parse_product_ids(raw_value: str) -> list[str]:
     return product_ids
 
 
+def parse_quote_currencies(raw_value: str) -> list[str]:
+    """Parse a comma-separated FX quote currency list into unique uppercase ISO codes."""
+
+    quote_currencies = [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+    quote_currencies = list(dict.fromkeys(quote_currencies))
+    if not quote_currencies:
+        raise ValueError("quote_currencies cannot be empty")
+
+    for currency in quote_currencies:
+        if len(currency) != 3 or not currency.isalpha():
+            raise ValueError(f"quote_currencies must contain 3-letter ISO codes, got: {currency}")
+
+    return quote_currencies
+
+
 def parse_series_ids(raw_value: str) -> list[str]:
     """Parse a comma-separated FRED series list into unique uppercase ids."""
 

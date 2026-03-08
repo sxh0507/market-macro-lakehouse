@@ -9,6 +9,7 @@ from lakehouse.common.models import (
     FredSeriesIngestionStats,
     GoldIngestionResult,
     LoadResult,
+    MacroGoldIngestionResult,
     ProductIngestionStats,
     SilverIngestionResult,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "EcbSilverIngestionResult",
     "FredSilverIngestionResult",
     "GoldIngestionResult",
+    "MacroGoldIngestionResult",
 ]
 
 __version__ = "0.1.0"

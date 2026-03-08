@@ -414,3 +414,59 @@ class GoldIngestionResult:
             "per_product_rows_returns": self.per_product_rows_returns,
             "per_product_rows_volatility": self.per_product_rows_volatility,
         }
+
+
+@dataclass(slots=True)
+class MacroGoldIngestionResult:
+    """Structured result returned by the Gold macro indicators pipeline."""
+
+    status: str
+    source_system: str
+    mode: str
+    start_date: str
+    end_date: str
+    source_table: str
+    target_table: str
+    run_id: str
+    quote_currencies: list[str] = field(default_factory=list)
+    series_ids: list[str] = field(default_factory=list)
+    metadata_table: str | None = None
+    revision_policy: str | None = None
+    rows_read: int = 0
+    rows_after_revision_collapse: int | None = None
+    rows_ready: int = 0
+    rows_to_update: int = 0
+    rows_to_insert: int = 0
+    rows_merged: int = 0
+    per_indicator_rows_ready: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        result = {
+            "status": self.status,
+            "source_system": self.source_system,
+            "mode": self.mode,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "source_table": self.source_table,
+            "target_table": self.target_table,
+            "rows_read": self.rows_read,
+            "rows_ready": self.rows_ready,
+            "rows_to_update": self.rows_to_update,
+            "rows_to_insert": self.rows_to_insert,
+            "rows_merged": self.rows_merged,
+            "run_id": self.run_id,
+            "per_indicator_rows_ready": self.per_indicator_rows_ready,
+        }
+
+        if self.quote_currencies:
+            result["quote_currencies"] = self.quote_currencies
+        if self.series_ids:
+            result["series_ids"] = self.series_ids
+        if self.metadata_table is not None:
+            result["metadata_table"] = self.metadata_table
+        if self.revision_policy is not None:
+            result["revision_policy"] = self.revision_policy
+        if self.rows_after_revision_collapse is not None:
+            result["rows_after_revision_collapse"] = self.rows_after_revision_collapse
+
+        return result
