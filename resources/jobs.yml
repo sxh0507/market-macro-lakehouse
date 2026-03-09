@@ -1,0 +1,191 @@
+resources:
+  jobs:
+    market_macro_daily:
+      name: ${bundle.name}-${bundle.target}-daily
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      schedule:
+        quartz_cron_expression: ${var.daily_job_cron}
+        timezone_id: ${var.daily_job_timezone}
+        pause_status: ${var.daily_job_pause_status}
+      job_clusters:
+        - job_cluster_key: pipeline_cluster
+          new_cluster:
+            spark_version: ${var.job_cluster_spark_version}
+            node_type_id: ${var.job_cluster_node_type_id}
+            num_workers: ${var.job_cluster_num_workers}
+      tasks:
+        - task_key: t10_bronze_market_coinbase
+          description: Daily Coinbase OHLC Bronze ingestion
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          notebook_task:
+            notebook_path: ../notebooks/10_direct_bronze_market_crypto_ingest.ipynb
+            source: WORKSPACE
+            base_parameters:
+              product_ids: ${var.market_product_ids}
+              mode: incremental
+              lookback_days: "3"
+
+        - task_key: t11_bronze_ecb
+          description: Daily ECB FX Bronze ingestion
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          notebook_task:
+            notebook_path: ../notebooks/11_bronze_ecb_ingest.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              quote_currencies: ${var.ecb_quote_currencies}
+              mode: incremental
+              lookback_days: "7"
+
+        - task_key: t12_bronze_fred
+          description: Daily FRED Bronze ingestion
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          notebook_task:
+            notebook_path: ../notebooks/12_bronze_fred_ingest.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              series_ids: ${var.fred_series_ids}
+              mode: incremental
+              lookback_days: "90"
+              secret_scope: ${var.fred_secret_scope}
+              secret_key: ${var.fred_secret_key}
+
+        - task_key: t20_silver_market
+          description: Market Silver transformation
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t10_bronze_market_coinbase
+          notebook_task:
+            notebook_path: ../notebooks/20_direct_silver_market_crypto_ohlc_1d.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              product_ids: ${var.market_product_ids}
+              mode: incremental
+              lookback_days: "3"
+
+        - task_key: t22_silver_ecb
+          description: ECB Macro Silver transformation
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t11_bronze_ecb
+          notebook_task:
+            notebook_path: ../notebooks/22_silver_macro_transform.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              source_system: ecb
+              quote_currencies: ${var.ecb_quote_currencies}
+              mode: incremental
+              lookback_days: "7"
+
+        - task_key: t22_silver_fred
+          description: FRED Macro Silver transformation
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t12_bronze_fred
+          notebook_task:
+            notebook_path: ../notebooks/22_silver_macro_transform.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              source_system: fred
+              series_ids: ${var.fred_series_ids}
+              mode: incremental
+              lookback_days: "90"
+
+        - task_key: t30_gold_market
+          description: Market Gold returns and volatility
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t20_silver_market
+          notebook_task:
+            notebook_path: ../notebooks/30_direct_gold_market_crypto_returns_volatility_1d.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              product_ids: ${var.market_product_ids}
+              mode: incremental
+              lookback_days: "3"
+
+        - task_key: t32_gold_ecb
+          description: ECB Macro Gold indicators
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t22_silver_ecb
+          notebook_task:
+            notebook_path: ../notebooks/32_gold_macro_indicators.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              source_system: ecb
+              quote_currencies: ${var.ecb_quote_currencies}
+              mode: incremental
+              lookback_days: "7"
+
+        - task_key: t32_gold_fred
+          description: FRED Macro Gold indicators
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t22_silver_fred
+          notebook_task:
+            notebook_path: ../notebooks/32_gold_macro_indicators.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              source_system: fred
+              series_ids: ${var.fred_series_ids}
+              mode: incremental
+              lookback_days: "90"
+
+        - task_key: t40_gold_cross
+          description: Cross-domain Gold feature assembly
+          job_cluster_key: pipeline_cluster
+          max_retries: 1
+          depends_on:
+            - task_key: t30_gold_market
+            - task_key: t32_gold_ecb
+            - task_key: t32_gold_fred
+          notebook_task:
+            notebook_path: ../notebooks/40_direct_gold_cross_crypto_macro_features_1d.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              product_ids: ${var.market_product_ids}
+              macro_indicator_ids: ${var.cross_macro_indicator_ids}
+              mode: incremental
+              lookback_days: "120"
+
+        - task_key: t70_observability
+          description: Pipeline observability aggregation
+          job_cluster_key: pipeline_cluster
+          max_retries: 0
+          run_if: ALL_DONE
+          depends_on:
+            - task_key: t10_bronze_market_coinbase
+            - task_key: t11_bronze_ecb
+            - task_key: t12_bronze_fred
+            - task_key: t20_silver_market
+            - task_key: t22_silver_ecb
+            - task_key: t22_silver_fred
+            - task_key: t30_gold_market
+            - task_key: t32_gold_ecb
+            - task_key: t32_gold_fred
+            - task_key: t40_gold_cross
+          notebook_task:
+            notebook_path: ../notebooks/70_pipeline_observability_metrics.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}

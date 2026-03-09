@@ -1,7 +1,55 @@
 bundle:
   name: market-macro-lakehouse
 
+include:
+  - resources/*.yml
+
 sync:
   paths:
     - notebooks
     - src
+
+variables:
+  catalog:
+    description: Unity Catalog catalog name used by the pipelines
+    default: market_macro
+  market_product_ids:
+    description: Comma-separated Coinbase products for the market pipeline
+    default: BTC-USD,ETH-USD,SOL-USD,LINK-USD,DOGE-USD
+  ecb_quote_currencies:
+    description: Comma-separated ECB quote currencies
+    default: USD
+  fred_series_ids:
+    description: Comma-separated FRED series ids
+    default: CPIAUCSL,FEDFUNDS,GDP
+  cross_macro_indicator_ids:
+    description: Comma-separated macro indicator ids used by the cross-domain Gold product
+    default: ECB_FX_REF_EUR_USD,FRED_CPIAUCSL,FRED_FEDFUNDS,FRED_GDP
+  fred_secret_scope:
+    description: Databricks secret scope that stores the FRED API key
+    default: market_macro
+  fred_secret_key:
+    description: Databricks secret key name for the FRED API key
+    default: fred_api_key
+  daily_job_cron:
+    description: Quartz cron expression for the daily orchestration job
+    default: 0 30 18 * * ?
+  daily_job_timezone:
+    description: Timezone for the daily orchestration job
+    default: Europe/Berlin
+  daily_job_pause_status:
+    description: Initial schedule pause status
+    default: PAUSED
+  job_cluster_spark_version:
+    description: Databricks Runtime version for the shared job cluster
+  job_cluster_node_type_id:
+    description: Cloud-specific node type id for the shared job cluster
+  job_cluster_num_workers:
+    description: Number of workers for the shared job cluster
+    default: 1
+
+targets:
+  dev:
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
