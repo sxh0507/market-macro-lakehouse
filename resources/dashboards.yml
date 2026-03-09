@@ -1,0 +1,6 @@
+resources:
+  dashboards:
+    market_macro_overview:
+      display_name: Market Macro Overview
+      warehouse_id: ${var.sql_warehouse_id}
+      file_path: ../dashboards/market_macro_overview.lvdash.json

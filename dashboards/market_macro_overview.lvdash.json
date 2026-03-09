@@ -1,0 +1,205 @@
+{
+  "datasets": [
+    {
+      "name": "75393183",
+      "displayName": "Pipeline Freshness",
+      "queryLines": [
+        "SELECT\n",
+        "  pipeline_name,\n",
+        "  source_name,\n",
+        "  target_table,\n",
+        "  watermark_value,\n",
+        "  watermark_type,\n",
+        "  status,\n",
+        "  last_success_at,\n",
+        "  updated_at\n",
+        "FROM market_macro.obs.obs_ingestion_state\n",
+        "ORDER BY\n",
+        "  source_name,\n",
+        "  pipeline_name;\n"
+      ]
+    },
+    {
+      "name": "05984607",
+      "displayName": "Recent Pipeline Runs",
+      "queryLines": [
+        "SELECT\n",
+        "  run_id,\n",
+        "  pipeline_name,\n",
+        "  layer,\n",
+        "  source_name,\n",
+        "  target_table,\n",
+        "  status,\n",
+        "  rows_read,\n",
+        "  rows_written,\n",
+        "  started_at,\n",
+        "  completed_at,\n",
+        "  error_message\n",
+        "FROM market_macro.obs.obs_pipeline_run_log\n",
+        "ORDER BY started_at DESC\n",
+        "LIMIT 100;"
+      ]
+    },
+    {
+      "name": "f75a9729",
+      "displayName": "Crypto Market Snapshot",
+      "queryLines": [
+        "WITH latest_market_date AS (\n",
+        "  SELECT MAX(bar_date) AS latest_bar_date\n",
+        "  FROM market_macro.gld_market.dp_crypto_returns_1d\n",
+        ")\n",
+        "SELECT\n",
+        "  r.bar_date,\n",
+        "  r.product_id,\n",
+        "  r.base_asset,\n",
+        "  r.quote_currency,\n",
+        "  r.close,\n",
+        "  r.simple_return_1d,\n",
+        "  r.log_return_1d,\n",
+        "  v.volatility_7d,\n",
+        "  v.volatility_30d,\n",
+        "  v.volatility_90d\n",
+        "FROM market_macro.gld_market.dp_crypto_returns_1d AS r\n",
+        "LEFT JOIN market_macro.gld_market.dp_crypto_volatility_1d AS v\n",
+        "  ON r.product_id = v.product_id\n",
+        " AND r.bar_date = v.bar_date\n",
+        "INNER JOIN latest_market_date AS d\n",
+        "  ON r.bar_date = d.latest_bar_date\n",
+        "ORDER BY r.product_id;"
+      ]
+    },
+    {
+      "name": "760b3e5e",
+      "displayName": "Macro Indicator Latest",
+      "queryLines": [
+        "WITH latest_macro_date AS (\n",
+        "  SELECT\n",
+        "    indicator_id,\n",
+        "    MAX(observation_date) AS latest_observation_date\n",
+        "  FROM market_macro.gld_macro.dp_macro_indicators\n",
+        "  GROUP BY indicator_id\n",
+        ")\n",
+        "SELECT\n",
+        "  m.source_system,\n",
+        "  m.indicator_id,\n",
+        "  m.indicator_group,\n",
+        "  m.observation_date,\n",
+        "  m.value,\n",
+        "  m.unit,\n",
+        "  m.frequency,\n",
+        "  m.is_official,\n",
+        "  m.derivation_method\n",
+        "FROM market_macro.gld_macro.dp_macro_indicators AS m\n",
+        "INNER JOIN latest_macro_date AS d\n",
+        "  ON m.indicator_id = d.indicator_id\n",
+        " AND m.observation_date = d.latest_observation_date\n",
+        "ORDER BY\n",
+        "  m.source_system,\n",
+        "  m.indicator_id;"
+      ]
+    },
+    {
+      "name": "d91424cf",
+      "displayName": "Cross Feature Snapshot",
+      "queryLines": [
+        "WITH latest_feature_date AS (\n",
+        "  SELECT MAX(feature_date) AS latest_feature_date\n",
+        "  FROM market_macro.gld_cross.dp_crypto_macro_features_1d\n",
+        ")\n",
+        "SELECT\n",
+        "  c.feature_date,\n",
+        "  c.product_id,\n",
+        "  c.base_asset,\n",
+        "  c.quote_currency,\n",
+        "  c.simple_return_1d,\n",
+        "  c.log_return_1d,\n",
+        "  c.volatility_7d,\n",
+        "  c.volatility_30d,\n",
+        "  c.fill_policy,\n",
+        "  c.macro_features\n",
+        "FROM market_macro.gld_cross.dp_crypto_macro_features_1d AS c\n",
+        "INNER JOIN latest_feature_date AS d\n",
+        "  ON c.feature_date = d.latest_feature_date\n",
+        "ORDER BY c.product_id;"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "7b16c99e",
+      "displayName": "Untitled page",
+      "layout": [
+        {
+          "widget": {
+            "name": "c455ce76",
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {}
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 14,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "d732f380",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "f0347b8a",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
+              "frame": {
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "eee8de05",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
+              "frame": {
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}

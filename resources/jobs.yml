@@ -172,3 +172,13 @@ resources:
             source: WORKSPACE
             base_parameters:
               catalog: ${var.catalog}
+
+        - task_key: t80_refresh_dashboard
+          description: Refresh the published AI/BI dashboard after pipeline completion
+          max_retries: 0
+          run_if: ALL_DONE
+          depends_on:
+            - task_key: t70_observability
+          dashboard_task:
+            dashboard_id: ${resources.dashboards.market_macro_overview.id}
+            warehouse_id: ${var.sql_warehouse_id}

@@ -40,6 +40,9 @@ variables:
   daily_job_pause_status:
     description: Initial schedule pause status
     default: PAUSED
+  sql_warehouse_id:
+    description: SQL warehouse used by the AI/BI dashboard and dashboard refresh task
+    default: b4a6b904b8ac6197
 
 targets:
   dev:
