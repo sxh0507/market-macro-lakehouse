@@ -10,21 +10,80 @@ from lakehouse.common.models import (
     FredSilverIngestionResult,
     SilverIngestionResult,
 )
-from lakehouse.common.runtime import UTC, parse_product_ids, parse_series_ids, resolve_date_window
+from lakehouse.common.runtime import (
+    UTC,
+    parse_product_ids,
+    parse_series_ids,
+    resolve_date_window,
+)
 from lakehouse.observability import PipelineObserver
 from lakehouse.sources.ecb import EcbSource
+
+FRED_STRUCTURAL_DQ_REASONS = (
+    "MISSING_SERIES_ID",
+    "MISSING_OBSERVATION_DATE",
+    "MISSING_REALTIME_START",
+    "MISSING_REALTIME_END",
+    "INVALID_REALTIME_ORDER",
+)
 
 
 def collect_counts(df: Any, key_column: str, count_alias: str) -> dict[str, int]:
     """Collect row counts grouped by the requested key into a Python dictionary."""
 
     counts = (
-        df.groupBy(key_column)
-        .count()
-        .withColumnRenamed("count", count_alias)
-        .collect()
+        df.groupBy(key_column).count().withColumnRenamed("count", count_alias).collect()
     )
     return {row[key_column]: int(row[count_alias]) for row in counts}
+
+
+def determine_fred_dq_reason(
+    *,
+    series_id: str | None,
+    observation_date: Any,
+    realtime_start: Any,
+    realtime_end: Any,
+    metadata_present: bool | None,
+    value: Any,
+) -> str | None:
+    """Apply the canonical FRED Silver DQ rule ordering to a single logical row."""
+
+    if series_id is None:
+        return "MISSING_SERIES_ID"
+    if observation_date is None:
+        return "MISSING_OBSERVATION_DATE"
+    if realtime_start is None:
+        return "MISSING_REALTIME_START"
+    if realtime_end is None:
+        return "MISSING_REALTIME_END"
+    if realtime_start > realtime_end:
+        return "INVALID_REALTIME_ORDER"
+    if metadata_present is not True:
+        return "MISSING_METADATA"
+    if value is None:
+        return "NULL_VALUE"
+    return None
+
+
+def build_fred_dq_reason_expr(F: Any) -> Any:
+    """Build the Spark expression that mirrors the canonical FRED DQ rule ordering."""
+
+    return (
+        F.when(F.col("series_id").isNull(), F.lit("MISSING_SERIES_ID"))
+        .when(F.col("observation_date").isNull(), F.lit("MISSING_OBSERVATION_DATE"))
+        .when(F.col("realtime_start").isNull(), F.lit("MISSING_REALTIME_START"))
+        .when(F.col("realtime_end").isNull(), F.lit("MISSING_REALTIME_END"))
+        .when(
+            F.col("realtime_start") > F.col("realtime_end"),
+            F.lit("INVALID_REALTIME_ORDER"),
+        )
+        .when(
+            F.col("metadata_present").isNull()
+            | (F.col("metadata_present") == F.lit(False)),
+            F.lit("MISSING_METADATA"),
+        )
+        .when(F.col("value").isNull(), F.lit("NULL_VALUE"))
+    )
 
 
 def run_silver_crypto_ohlc_1d(
@@ -48,10 +107,14 @@ def run_silver_crypto_ohlc_1d(
     from pyspark.sql.window import Window  # type: ignore import-not-found
 
     product_ids = parse_product_ids(raw_product_ids)
-    start_date, end_date = resolve_date_window(mode, start_date_raw, end_date_raw, lookback_days_raw)
+    start_date, end_date = resolve_date_window(
+        mode, start_date_raw, end_date_raw, lookback_days_raw
+    )
     source_table = source_table or f"{catalog}.brz_market.raw_coinbase_ohlc_1d"
     target_table = target_table or f"{catalog}.slv_market.crypto_ohlc_1d"
-    quarantine_table = quarantine_table or f"{catalog}.slv_market.crypto_ohlc_1d_quarantine"
+    quarantine_table = (
+        quarantine_table or f"{catalog}.slv_market.crypto_ohlc_1d_quarantine"
+    )
 
     if not spark.catalog.tableExists(source_table):
         raise RuntimeError(
@@ -103,12 +166,17 @@ def run_silver_crypto_ohlc_1d(
                 "payload_hash",
             )
             .filter(F.col("product_id").isin(product_ids))
-            .filter((F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date)))
+            .filter(
+                (F.col("bar_date") >= F.lit(start_date))
+                & (F.col("bar_date") <= F.lit(end_date))
+            )
         )
 
         rows_read = bronze_df.count()
         observer.update_progress(rows_read=rows_read)
-        per_product_rows_read = collect_counts(bronze_df, "product_id", "rows_read") if rows_read else {}
+        per_product_rows_read = (
+            collect_counts(bronze_df, "product_id", "rows_read") if rows_read else {}
+        )
 
         if rows_read == 0:
             result = SilverIngestionResult(
@@ -148,14 +216,15 @@ def run_silver_crypto_ohlc_1d(
         )
 
         bronze_latest_df = (
-            bronze_df
-            .withColumn("_row_number", F.row_number().over(dedup_window))
+            bronze_df.withColumn("_row_number", F.row_number().over(dedup_window))
             .filter(F.col("_row_number") == 1)
             .drop("_row_number")
         )
 
         rows_after_dedup = bronze_latest_df.count()
-        per_product_rows_after_dedup = collect_counts(bronze_latest_df, "product_id", "rows_after_dedup")
+        per_product_rows_after_dedup = collect_counts(
+            bronze_latest_df, "product_id", "rows_after_dedup"
+        )
 
         product_parts = F.split(F.col("product_id"), "-")
         structural_invalid_df = bronze_latest_df.filter(
@@ -176,11 +245,9 @@ def run_silver_crypto_ohlc_1d(
             )
 
         silver_ingested_at = datetime.now(UTC)
-        transformed_df = (
-            bronze_latest_df
-            .withColumn("base_asset", F.element_at(product_parts, 1))
-            .withColumn("quote_currency", F.element_at(product_parts, 2))
-        )
+        transformed_df = bronze_latest_df.withColumn(
+            "base_asset", F.element_at(product_parts, 1)
+        ).withColumn("quote_currency", F.element_at(product_parts, 2))
 
         dq_reason = (
             F.when(F.col("open").isNull(), F.lit("open_null"))
@@ -204,7 +271,9 @@ def run_silver_crypto_ohlc_1d(
         rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
         rows_rejected = rejected_df.count()
         per_product_rows_rejected = (
-            collect_counts(rejected_df, "product_id", "rows_rejected") if rows_rejected else {}
+            collect_counts(rejected_df, "product_id", "rows_rejected")
+            if rows_rejected
+            else {}
         )
 
         quarantine_df = rejected_df.select(
@@ -229,11 +298,12 @@ def run_silver_crypto_ohlc_1d(
 
         rows_quarantined = quarantine_df.count()
         if rows_quarantined > 0:
-            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+            quarantine_df.write.format("delta").mode("append").saveAsTable(
+                quarantine_table
+            )
 
         valid_df = (
-            assessed_df
-            .filter(F.col("dq_reason").isNull())
+            assessed_df.filter(F.col("dq_reason").isNull())
             .select(
                 "product_id",
                 "bar_date",
@@ -379,7 +449,9 @@ def run_silver_ecb_fx_ref_rates_daily(
 
     source = source or EcbSource()
     quote_currencies = source.parse_quote_currencies(raw_quote_currencies)
-    latest_complete_date = datetime.now(source.local_timezone).date() - timedelta(days=1)
+    latest_complete_date = datetime.now(source.local_timezone).date() - timedelta(
+        days=1
+    )
     start_date, end_date = resolve_date_window(
         mode,
         start_date_raw,
@@ -390,7 +462,9 @@ def run_silver_ecb_fx_ref_rates_daily(
     )
     source_table = source_table or f"{catalog}.brz_macro.raw_ecb_fx_ref_rates_daily"
     target_table = target_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily"
-    quarantine_table = quarantine_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily_quarantine"
+    quarantine_table = (
+        quarantine_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily_quarantine"
+    )
 
     if not spark.catalog.tableExists(source_table):
         raise RuntimeError(
@@ -437,13 +511,18 @@ def run_silver_ecb_fx_ref_rates_daily(
                 F.col("payload_hash"),
             )
             .filter(F.col("quote_currency").isin(quote_currencies))
-            .filter((F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date)))
+            .filter(
+                (F.col("rate_date") >= F.lit(start_date))
+                & (F.col("rate_date") <= F.lit(end_date))
+            )
         )
 
         rows_read = bronze_df.count()
         observer.update_progress(rows_read=rows_read)
         per_currency_rows_read = (
-            collect_counts(bronze_df, "quote_currency", "rows_read") if rows_read else {}
+            collect_counts(bronze_df, "quote_currency", "rows_read")
+            if rows_read
+            else {}
         )
 
         if rows_read == 0:
@@ -478,14 +557,15 @@ def run_silver_ecb_fx_ref_rates_daily(
             )
             return result
 
-        dedup_window = Window.partitionBy("base_currency", "quote_currency", "rate_date").orderBy(
+        dedup_window = Window.partitionBy(
+            "base_currency", "quote_currency", "rate_date"
+        ).orderBy(
             F.col("source_ingested_at").desc(),
             F.col("payload_hash").desc(),
         )
 
         bronze_latest_df = (
-            bronze_df
-            .withColumn("_row_number", F.row_number().over(dedup_window))
+            bronze_df.withColumn("_row_number", F.row_number().over(dedup_window))
             .filter(F.col("_row_number") == 1)
             .drop("_row_number")
         )
@@ -525,7 +605,9 @@ def run_silver_ecb_fx_ref_rates_daily(
         rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
         rows_rejected = rejected_df.count()
         per_currency_rows_rejected = (
-            collect_counts(rejected_df, "quote_currency", "rows_rejected") if rows_rejected else {}
+            collect_counts(rejected_df, "quote_currency", "rows_rejected")
+            if rows_rejected
+            else {}
         )
 
         quarantine_df = rejected_df.select(
@@ -543,11 +625,12 @@ def run_silver_ecb_fx_ref_rates_daily(
 
         rows_quarantined = quarantine_df.count()
         if rows_quarantined > 0:
-            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+            quarantine_df.write.format("delta").mode("append").saveAsTable(
+                quarantine_table
+            )
 
         valid_df = (
-            assessed_df
-            .filter(F.col("dq_reason").isNull())
+            assessed_df.filter(F.col("dq_reason").isNull())
             .select(
                 "base_currency",
                 "quote_currency",
@@ -560,12 +643,16 @@ def run_silver_ecb_fx_ref_rates_daily(
 
         rows_valid = valid_df.count()
         per_currency_rows_merged = (
-            collect_counts(valid_df, "quote_currency", "rows_merged") if rows_valid else {}
+            collect_counts(valid_df, "quote_currency", "rows_merged")
+            if rows_valid
+            else {}
         )
 
         if rows_valid == 0:
             if rows_quarantined > 0 and display_fn is not None:
-                display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+                display_fn(
+                    quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason")
+                )
 
             result = EcbSilverIngestionResult(
                 status="success_empty_valid",
@@ -603,7 +690,9 @@ def run_silver_ecb_fx_ref_rates_daily(
         existing_key_count = (
             valid_df.select("base_currency", "quote_currency", "rate_date")
             .join(
-                spark.table(target_table).select("base_currency", "quote_currency", "rate_date"),
+                spark.table(target_table).select(
+                    "base_currency", "quote_currency", "rate_date"
+                ),
                 on=["base_currency", "quote_currency", "rate_date"],
                 how="inner",
             )
@@ -626,7 +715,9 @@ def run_silver_ecb_fx_ref_rates_daily(
         if display_fn is not None:
             display_fn(valid_df.orderBy("quote_currency", "rate_date"))
             if rows_quarantined > 0:
-                display_fn(quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason"))
+                display_fn(
+                    quarantine_df.orderBy("quote_currency", "rate_date", "dq_reason")
+                )
 
         result = EcbSilverIngestionResult(
             status="success",
@@ -685,20 +776,17 @@ def run_silver_fred_series_clean(
     from pyspark.sql.window import Window  # type: ignore import-not-found
 
     dedup_strategy = "technical_duplicate_elimination_on_full_revision_key"
-    structural_reasons = [
-        "MISSING_SERIES_ID",
-        "MISSING_OBSERVATION_DATE",
-        "MISSING_REALTIME_START",
-        "MISSING_REALTIME_END",
-        "INVALID_REALTIME_ORDER",
-    ]
 
     series_ids = parse_series_ids(raw_series_ids)
-    start_date, end_date = resolve_date_window(mode, start_date_raw, end_date_raw, lookback_days_raw)
+    start_date, end_date = resolve_date_window(
+        mode, start_date_raw, end_date_raw, lookback_days_raw
+    )
     source_table = source_table or f"{catalog}.brz_macro.raw_fred_series"
     metadata_table = metadata_table or f"{catalog}.brz_macro.raw_fred_series_metadata"
     target_table = target_table or f"{catalog}.slv_macro.fred_series_clean"
-    quarantine_table = quarantine_table or f"{catalog}.slv_macro.fred_series_clean_quarantine"
+    quarantine_table = (
+        quarantine_table or f"{catalog}.slv_macro.fred_series_clean_quarantine"
+    )
 
     for table_name in [source_table, metadata_table, target_table, quarantine_table]:
         if not spark.catalog.tableExists(table_name):
@@ -761,7 +849,9 @@ def run_silver_fred_series_clean(
 
         rows_read = bronze_df.count()
         observer.update_progress(rows_read=rows_read)
-        per_series_rows_read = collect_counts(bronze_df, "series_id", "rows_read") if rows_read else {}
+        per_series_rows_read = (
+            collect_counts(bronze_df, "series_id", "rows_read") if rows_read else {}
+        )
 
         if rows_read == 0:
             result = FredSilverIngestionResult(
@@ -810,8 +900,7 @@ def run_silver_fred_series_clean(
         )
 
         bronze_latest_df = (
-            bronze_df
-            .withColumn("_row_number", F.row_number().over(dedup_window))
+            bronze_df.withColumn("_row_number", F.row_number().over(dedup_window))
             .filter(F.col("_row_number") == 1)
             .drop("_row_number")
         )
@@ -824,34 +913,29 @@ def run_silver_fred_series_clean(
         )
 
         if available_metadata_ids:
-            metadata_flags_df = (
-                spark.createDataFrame(
-                    [(series_id,) for series_id in sorted(available_metadata_ids)],
-                    "series_id string",
-                )
-                .withColumn("metadata_present", F.lit(True))
+            metadata_flags_df = spark.createDataFrame(
+                [(series_id,) for series_id in sorted(available_metadata_ids)],
+                "series_id string",
+            ).withColumn("metadata_present", F.lit(True))
+            assessed_df = bronze_latest_df.join(
+                metadata_flags_df, on="series_id", how="left"
             )
-            assessed_df = bronze_latest_df.join(metadata_flags_df, on="series_id", how="left")
         else:
-            assessed_df = bronze_latest_df.withColumn("metadata_present", F.lit(None).cast("boolean"))
+            assessed_df = bronze_latest_df.withColumn(
+                "metadata_present", F.lit(None).cast("boolean")
+            )
 
-        dq_reason = (
-            F.when(F.col("series_id").isNull(), F.lit("MISSING_SERIES_ID"))
-            .when(F.col("observation_date").isNull(), F.lit("MISSING_OBSERVATION_DATE"))
-            .when(F.col("realtime_start").isNull(), F.lit("MISSING_REALTIME_START"))
-            .when(F.col("realtime_end").isNull(), F.lit("MISSING_REALTIME_END"))
-            .when(F.col("realtime_start") > F.col("realtime_end"), F.lit("INVALID_REALTIME_ORDER"))
-            .when(F.col("metadata_present").isNull(), F.lit("MISSING_METADATA"))
-            .when(F.col("value").isNull(), F.lit("NULL_VALUE"))
-        )
-
-        assessed_df = assessed_df.withColumn("dq_reason", dq_reason)
-        rows_structural_invalid = assessed_df.filter(F.col("dq_reason").isin(structural_reasons)).count()
+        assessed_df = assessed_df.withColumn("dq_reason", build_fred_dq_reason_expr(F))
+        rows_structural_invalid = assessed_df.filter(
+            F.col("dq_reason").isin(FRED_STRUCTURAL_DQ_REASONS)
+        ).count()
 
         rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
         rows_rejected = rejected_df.count()
         per_series_rows_rejected = (
-            collect_counts(rejected_df, "series_id", "rows_rejected") if rows_rejected else {}
+            collect_counts(rejected_df, "series_id", "rows_rejected")
+            if rows_rejected
+            else {}
         )
 
         silver_ingested_at = datetime.now(UTC)
@@ -872,11 +956,12 @@ def run_silver_fred_series_clean(
 
         rows_quarantined = quarantine_df.count()
         if rows_quarantined > 0:
-            quarantine_df.write.format("delta").mode("append").saveAsTable(quarantine_table)
+            quarantine_df.write.format("delta").mode("append").saveAsTable(
+                quarantine_table
+            )
 
         valid_df = (
-            assessed_df
-            .filter(F.col("dq_reason").isNull())
+            assessed_df.filter(F.col("dq_reason").isNull())
             .select(
                 "series_id",
                 "observation_date",
@@ -896,7 +981,9 @@ def run_silver_fred_series_clean(
         if rows_valid == 0:
             if rows_quarantined > 0 and display_fn is not None:
                 display_fn(
-                    quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason")
+                    quarantine_df.orderBy(
+                        "series_id", "observation_date", "realtime_start", "dq_reason"
+                    )
                 )
 
             result = FredSilverIngestionResult(
@@ -938,7 +1025,9 @@ def run_silver_fred_series_clean(
             return result
 
         existing_key_count = (
-            valid_df.select("series_id", "observation_date", "realtime_start", "realtime_end")
+            valid_df.select(
+                "series_id", "observation_date", "realtime_start", "realtime_end"
+            )
             .join(
                 spark.table(target_table).select(
                     "series_id",
@@ -967,10 +1056,16 @@ def run_silver_fred_series_clean(
         ).whenNotMatchedInsertAll().execute()
 
         if display_fn is not None:
-            display_fn(valid_df.orderBy("series_id", "observation_date", "realtime_start", "realtime_end"))
+            display_fn(
+                valid_df.orderBy(
+                    "series_id", "observation_date", "realtime_start", "realtime_end"
+                )
+            )
             if rows_quarantined > 0:
                 display_fn(
-                    quarantine_df.orderBy("series_id", "observation_date", "realtime_start", "dq_reason")
+                    quarantine_df.orderBy(
+                        "series_id", "observation_date", "realtime_start", "dq_reason"
+                    )
                 )
 
         result = FredSilverIngestionResult(

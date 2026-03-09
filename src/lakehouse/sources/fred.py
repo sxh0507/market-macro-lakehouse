@@ -10,7 +10,7 @@ from datetime import date, datetime
 import requests
 
 from lakehouse.common.models import FredSeriesIngestionStats
-from lakehouse.common.runtime import UTC, parse_iso_date
+from lakehouse.common.runtime import parse_iso_date
 from lakehouse.sources.base import SourceAdapter
 
 
@@ -73,7 +73,9 @@ class FredSource(SourceAdapter):
                 )
             except requests.RequestException as exc:
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(f"FRED request failed for endpoint {endpoint}") from exc
+                    raise RuntimeError(
+                        f"FRED request failed for endpoint {endpoint}"
+                    ) from exc
 
                 wait_seconds = (2**attempt) + 0.5
                 print(
@@ -130,11 +132,15 @@ class FredSource(SourceAdapter):
 
         series_items = payload.get("seriess", [])
         if not series_items:
-            raise RuntimeError(f"No FRED series metadata returned for series_id={series_id}")
+            raise RuntimeError(
+                f"No FRED series metadata returned for series_id={series_id}"
+            )
 
         series_item = series_items[0]
         payload_hash = hashlib.sha256(
-            json.dumps(series_item, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            json.dumps(series_item, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
         ).hexdigest()
 
         return {
@@ -146,8 +152,12 @@ class FredSource(SourceAdapter):
             "units_short": series_item.get("units_short"),
             "seasonal_adjustment": series_item.get("seasonal_adjustment"),
             "seasonal_adjustment_short": series_item.get("seasonal_adjustment_short"),
-            "observation_start": self.parse_optional_date(series_item.get("observation_start")),
-            "observation_end": self.parse_optional_date(series_item.get("observation_end")),
+            "observation_start": self.parse_optional_date(
+                series_item.get("observation_start")
+            ),
+            "observation_end": self.parse_optional_date(
+                series_item.get("observation_end")
+            ),
             "last_updated": series_item.get("last_updated"),
             "notes": series_item.get("notes"),
             "ingested_at": ingested_at,
@@ -200,18 +210,24 @@ class FredSource(SourceAdapter):
 
             for observation in observations:
                 payload_hash = hashlib.sha256(
-                    json.dumps(observation, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    json.dumps(
+                        observation, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
                 ).hexdigest()
                 value_raw = observation.get("value")
                 records.append(
                     {
                         "series_id": series_id,
-                        "observation_date": parse_iso_date("observation_date", observation["date"]),
+                        "observation_date": parse_iso_date(
+                            "observation_date", observation["date"]
+                        ),
                         "realtime_start": parse_iso_date(
                             "realtime_start",
                             observation["realtime_start"],
                         ),
-                        "realtime_end": parse_iso_date("realtime_end", observation["realtime_end"]),
+                        "realtime_end": parse_iso_date(
+                            "realtime_end", observation["realtime_end"]
+                        ),
                         "value_raw": value_raw,
                         "value": self.parse_value(value_raw),
                         "ingested_at": ingested_at,

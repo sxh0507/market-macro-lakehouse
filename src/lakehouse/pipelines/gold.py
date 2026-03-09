@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
-from lakehouse.common.models import CrossGoldIngestionResult, GoldIngestionResult, MacroGoldIngestionResult
+from lakehouse.common.models import (
+    CrossGoldIngestionResult,
+    GoldIngestionResult,
+    MacroGoldIngestionResult,
+)
 from lakehouse.common.runtime import (
     UTC,
     parse_indicator_ids,
@@ -26,11 +30,17 @@ FRED_INDICATOR_GROUPS = {
 }
 
 
-def ensure_table_exists(spark: Any, table_name: str, notebook_name: str = "00_platform_setup_catalog_schema.ipynb"):
+def ensure_table_exists(
+    spark: Any,
+    table_name: str,
+    notebook_name: str = "00_platform_setup_catalog_schema.ipynb",
+):
     """Raise a consistent error when a required source or target table is missing."""
 
     if not spark.catalog.tableExists(table_name):
-        raise RuntimeError(f"Required table {table_name} does not exist. Run {notebook_name} first.")
+        raise RuntimeError(
+            f"Required table {table_name} does not exist. Run {notebook_name} first."
+        )
 
 
 def collect_product_counts(df: Any, count_alias: str) -> dict[str, int]:
@@ -49,10 +59,7 @@ def collect_counts(df: Any, key_column: str, count_alias: str) -> dict[str, int]
     """Collect grouped counts into a Python dictionary keyed by the selected column."""
 
     counts = (
-        df.groupBy(key_column)
-        .count()
-        .withColumnRenamed("count", count_alias)
-        .collect()
+        df.groupBy(key_column).count().withColumnRenamed("count", count_alias).collect()
     )
     return {row[key_column]: int(row[count_alias]) for row in counts}
 
@@ -65,6 +72,80 @@ def create_indicator_group_expr(F: Any):
         mapping_items.extend([F.lit(series_id), F.lit(indicator_group)])
     mapping_expr = F.create_map(mapping_items)
     return F.element_at(mapping_expr, F.col("series_id"))
+
+
+def _sortable_optional(value: Any) -> tuple[bool, Any]:
+    """Convert an optional value into a comparison-safe tuple."""
+
+    return (value is not None, value)
+
+
+def select_latest_fred_revision_rows(
+    rows: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse FRED revisions to the latest available row per (series_id, observation_date)."""
+
+    latest_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for raw_row in rows:
+        row = dict(raw_row)
+        key = (row["series_id"], row["observation_date"])
+        sort_key = (
+            row["realtime_start"],
+            row["realtime_end"],
+            _sortable_optional(row.get("ingested_at")),
+        )
+        existing_row = latest_by_key.get(key)
+        if existing_row is None:
+            latest_by_key[key] = row
+            continue
+
+        existing_sort_key = (
+            existing_row["realtime_start"],
+            existing_row["realtime_end"],
+            _sortable_optional(existing_row.get("ingested_at")),
+        )
+        if sort_key > existing_sort_key:
+            latest_by_key[key] = row
+
+    return [latest_by_key[key] for key in sorted(latest_by_key)]
+
+
+def build_macro_asof_feature_map(
+    feature_dates: list[Any],
+    macro_rows: list[Mapping[str, Any]],
+) -> dict[Any, dict[str, Any]]:
+    """Build the per-feature-date macro MAP payload using observation-date as-of semantics."""
+
+    feature_map: dict[Any, dict[str, Any]] = {}
+    indicator_ids = sorted({row["indicator_id"] for row in macro_rows})
+
+    for feature_date in sorted(feature_dates):
+        values_for_date: dict[str, Any] = {}
+        for indicator_id in indicator_ids:
+            candidates = [
+                row
+                for row in macro_rows
+                if row["indicator_id"] == indicator_id
+                and row["value"] is not None
+                and row["observation_date"] <= feature_date
+            ]
+            if not candidates:
+                continue
+
+            best_row = max(
+                candidates,
+                key=lambda row: (
+                    row["observation_date"],
+                    _sortable_optional(row.get("computed_at")),
+                    _sortable_optional(row.get("run_id")),
+                ),
+            )
+            values_for_date[indicator_id] = best_row["value"]
+
+        if values_for_date:
+            feature_map[feature_date] = values_for_date
+
+    return feature_map
 
 
 def run_gold_crypto_returns_and_volatility(
@@ -88,15 +169,21 @@ def run_gold_crypto_returns_and_volatility(
     from pyspark.sql.window import Window  # type: ignore import-not-found
 
     product_ids = parse_product_ids(raw_product_ids)
-    start_date, end_date = resolve_date_window(mode, start_date_raw, end_date_raw, lookback_days_raw)
+    start_date, end_date = resolve_date_window(
+        mode, start_date_raw, end_date_raw, lookback_days_raw
+    )
     source_start_date = start_date - timedelta(days=MAX_VOLATILITY_LOOKBACK_DAYS)
 
     source_table = source_table or f"{catalog}.slv_market.crypto_ohlc_1d"
     returns_table = returns_table or f"{catalog}.gld_market.dp_crypto_returns_1d"
-    volatility_table = volatility_table or f"{catalog}.gld_market.dp_crypto_volatility_1d"
+    volatility_table = (
+        volatility_table or f"{catalog}.gld_market.dp_crypto_volatility_1d"
+    )
 
     if not spark.catalog.tableExists(source_table):
-        raise RuntimeError(f"Source table {source_table} does not exist. Run the Silver pipeline first.")
+        raise RuntimeError(
+            f"Source table {source_table} does not exist. Run the Silver pipeline first."
+        )
 
     if not spark.catalog.tableExists(returns_table):
         raise RuntimeError(
@@ -147,13 +234,18 @@ def run_gold_crypto_returns_and_volatility(
             spark.table(source_table)
             .select("product_id", "bar_date", "base_asset", "quote_currency", "close")
             .filter(F.col("product_id").isin(product_ids))
-            .filter((F.col("bar_date") >= F.lit(source_start_date)) & (F.col("bar_date") <= F.lit(end_date)))
+            .filter(
+                (F.col("bar_date") >= F.lit(source_start_date))
+                & (F.col("bar_date") <= F.lit(end_date))
+            )
         )
 
         rows_read = silver_df.count()
         returns_observer.update_progress(rows_read=rows_read)
         volatility_observer.update_progress(rows_read=rows_read)
-        per_product_rows_read = collect_product_counts(silver_df, "rows_read") if rows_read else {}
+        per_product_rows_read = (
+            collect_product_counts(silver_df, "rows_read") if rows_read else {}
+        )
 
         if rows_read == 0:
             result = GoldIngestionResult(
@@ -198,22 +290,29 @@ def run_gold_crypto_returns_and_volatility(
 
         order_window = Window.partitionBy("product_id").orderBy("bar_date")
         returns_base_df = (
-            silver_df
-            .withColumn("prev_close", F.lag("close").over(order_window))
+            silver_df.withColumn("prev_close", F.lag("close").over(order_window))
             .withColumn(
                 "simple_return_1d",
-                F.when(F.col("prev_close") > 0, (F.col("close") / F.col("prev_close")) - F.lit(1.0)),
+                F.when(
+                    F.col("prev_close") > 0,
+                    (F.col("close") / F.col("prev_close")) - F.lit(1.0),
+                ),
             )
             .withColumn(
                 "log_return_1d",
-                F.when((F.col("close") > 0) & (F.col("prev_close") > 0), F.log(F.col("close") / F.col("prev_close"))),
+                F.when(
+                    (F.col("close") > 0) & (F.col("prev_close") > 0),
+                    F.log(F.col("close") / F.col("prev_close")),
+                ),
             )
         )
 
         computed_at = datetime.now(UTC)
         returns_df = (
-            returns_base_df
-            .filter((F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date)))
+            returns_base_df.filter(
+                (F.col("bar_date") >= F.lit(start_date))
+                & (F.col("bar_date") <= F.lit(end_date))
+            )
             .select(
                 "product_id",
                 "bar_date",
@@ -228,34 +327,50 @@ def run_gold_crypto_returns_and_volatility(
         )
 
         rows_returns_ready = returns_df.count()
-        per_product_rows_returns = collect_product_counts(returns_df, "rows_returns") if rows_returns_ready else {}
+        per_product_rows_returns = (
+            collect_product_counts(returns_df, "rows_returns")
+            if rows_returns_ready
+            else {}
+        )
 
         window_7 = order_window.rowsBetween(-6, 0)
         window_30 = order_window.rowsBetween(-29, 0)
         window_90 = order_window.rowsBetween(-89, 0)
 
         volatility_base_df = (
-            returns_base_df
-            .withColumn("returns_count_7", F.count("simple_return_1d").over(window_7))
+            returns_base_df.withColumn(
+                "returns_count_7", F.count("simple_return_1d").over(window_7)
+            )
             .withColumn("returns_count_30", F.count("simple_return_1d").over(window_30))
             .withColumn("returns_count_90", F.count("simple_return_1d").over(window_90))
             .withColumn(
                 "volatility_7d",
-                F.when(F.col("returns_count_7") == 7, F.stddev_samp("simple_return_1d").over(window_7)),
+                F.when(
+                    F.col("returns_count_7") == 7,
+                    F.stddev_samp("simple_return_1d").over(window_7),
+                ),
             )
             .withColumn(
                 "volatility_30d",
-                F.when(F.col("returns_count_30") == 30, F.stddev_samp("simple_return_1d").over(window_30)),
+                F.when(
+                    F.col("returns_count_30") == 30,
+                    F.stddev_samp("simple_return_1d").over(window_30),
+                ),
             )
             .withColumn(
                 "volatility_90d",
-                F.when(F.col("returns_count_90") == 90, F.stddev_samp("simple_return_1d").over(window_90)),
+                F.when(
+                    F.col("returns_count_90") == 90,
+                    F.stddev_samp("simple_return_1d").over(window_90),
+                ),
             )
         )
 
         volatility_df = (
-            volatility_base_df
-            .filter((F.col("bar_date") >= F.lit(start_date)) & (F.col("bar_date") <= F.lit(end_date)))
+            volatility_base_df.filter(
+                (F.col("bar_date") >= F.lit(start_date))
+                & (F.col("bar_date") <= F.lit(end_date))
+            )
             .select(
                 "product_id",
                 "bar_date",
@@ -272,7 +387,9 @@ def run_gold_crypto_returns_and_volatility(
 
         rows_volatility_ready = volatility_df.count()
         per_product_rows_volatility = (
-            collect_product_counts(volatility_df, "rows_volatility") if rows_volatility_ready else {}
+            collect_product_counts(volatility_df, "rows_volatility")
+            if rows_volatility_ready
+            else {}
         )
 
         existing_returns_key_count = (
@@ -301,35 +418,35 @@ def run_gold_crypto_returns_and_volatility(
 
         if rows_returns_ready > 0:
             DeltaTable.forName(spark, returns_table).alias("tgt").merge(
-            returns_df.alias("src"),
-            "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
+                returns_df.alias("src"),
+                "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
             ).whenMatchedUpdate(
-            set={
-                "base_asset": "src.base_asset",
-                "quote_currency": "src.quote_currency",
-                "close": "src.close",
-                "simple_return_1d": "src.simple_return_1d",
-                "log_return_1d": "src.log_return_1d",
-                "computed_at": "src.computed_at",
-                "run_id": "src.run_id",
-            }
+                set={
+                    "base_asset": "src.base_asset",
+                    "quote_currency": "src.quote_currency",
+                    "close": "src.close",
+                    "simple_return_1d": "src.simple_return_1d",
+                    "log_return_1d": "src.log_return_1d",
+                    "computed_at": "src.computed_at",
+                    "run_id": "src.run_id",
+                }
             ).whenNotMatchedInsertAll().execute()
 
         if rows_volatility_ready > 0:
             DeltaTable.forName(spark, volatility_table).alias("tgt").merge(
-            volatility_df.alias("src"),
-            "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
+                volatility_df.alias("src"),
+                "tgt.product_id = src.product_id AND tgt.bar_date = src.bar_date",
             ).whenMatchedUpdate(
-            set={
-                "base_asset": "src.base_asset",
-                "quote_currency": "src.quote_currency",
-                "simple_return_1d": "src.simple_return_1d",
-                "volatility_7d": "src.volatility_7d",
-                "volatility_30d": "src.volatility_30d",
-                "volatility_90d": "src.volatility_90d",
-                "computed_at": "src.computed_at",
-                "run_id": "src.run_id",
-            }
+                set={
+                    "base_asset": "src.base_asset",
+                    "quote_currency": "src.quote_currency",
+                    "simple_return_1d": "src.simple_return_1d",
+                    "volatility_7d": "src.volatility_7d",
+                    "volatility_30d": "src.volatility_30d",
+                    "volatility_90d": "src.volatility_90d",
+                    "computed_at": "src.computed_at",
+                    "run_id": "src.run_id",
+                }
             ).whenNotMatchedInsertAll().execute()
 
         if display_fn is not None:
@@ -355,7 +472,8 @@ def run_gold_crypto_returns_and_volatility(
             rows_returns_to_insert=rows_returns_ready - existing_returns_key_count,
             rows_returns_merged=rows_returns_ready,
             rows_volatility_to_update=existing_volatility_key_count,
-            rows_volatility_to_insert=rows_volatility_ready - existing_volatility_key_count,
+            rows_volatility_to_insert=rows_volatility_ready
+            - existing_volatility_key_count,
             rows_volatility_merged=rows_volatility_ready,
             run_id=run_id,
             per_product_rows_read=per_product_rows_read,
@@ -438,7 +556,9 @@ def run_gold_macro_indicators(
     with observer:
         if normalized_source_system == "ecb":
             quote_currencies = parse_quote_currencies(raw_quote_currencies)
-            source_table = ecb_source_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily"
+            source_table = (
+                ecb_source_table or f"{catalog}.slv_macro.ecb_fx_ref_rates_daily"
+            )
             ensure_table_exists(spark, source_table)
 
             silver_df = (
@@ -450,7 +570,10 @@ def run_gold_macro_indicators(
                     "rate",
                 )
                 .filter(F.col("quote_currency").isin(quote_currencies))
-                .filter((F.col("rate_date") >= F.lit(start_date)) & (F.col("rate_date") <= F.lit(end_date)))
+                .filter(
+                    (F.col("rate_date") >= F.lit(start_date))
+                    & (F.col("rate_date") <= F.lit(end_date))
+                )
             )
 
             rows_read = silver_df.count()
@@ -480,8 +603,7 @@ def run_gold_macro_indicators(
 
             computed_at = datetime.now(UTC)
             gold_df = (
-                silver_df
-                .withColumn(
+                silver_df.withColumn(
                     "indicator_id",
                     F.concat_ws(
                         "_",
@@ -496,7 +618,12 @@ def run_gold_macro_indicators(
                 .withColumn("source_system", F.lit("ecb"))
                 .withColumn("indicator_group", F.lit("fx_ref_rate"))
                 .withColumn("value", F.col("rate"))
-                .withColumn("unit", F.concat(F.col("quote_currency"), F.lit(" per "), F.col("base_currency")))
+                .withColumn(
+                    "unit",
+                    F.concat(
+                        F.col("quote_currency"), F.lit(" per "), F.col("base_currency")
+                    ),
+                )
                 .withColumn("frequency", F.lit("D"))
                 .withColumn("is_official", F.lit(True))
                 .withColumn("derivation_method", F.lit("official_source"))
@@ -520,10 +647,10 @@ def run_gold_macro_indicators(
             )
 
             duplicate_key_count = (
-            gold_df.groupBy("indicator_id", "observation_date")
-            .count()
-            .filter(F.col("count") > 1)
-            .count()
+                gold_df.groupBy("indicator_id", "observation_date")
+                .count()
+                .filter(F.col("count") > 1)
+                .count()
             )
             if duplicate_key_count > 0:
                 raise RuntimeError(
@@ -532,15 +659,19 @@ def run_gold_macro_indicators(
 
             rows_ready = gold_df.count()
             existing_key_count = (
-            gold_df.select("indicator_id", "observation_date")
-            .join(
-                spark.table(target_table).select("indicator_id", "observation_date"),
-                on=["indicator_id", "observation_date"],
-                how="inner",
+                gold_df.select("indicator_id", "observation_date")
+                .join(
+                    spark.table(target_table).select(
+                        "indicator_id", "observation_date"
+                    ),
+                    on=["indicator_id", "observation_date"],
+                    how="inner",
+                )
+                .count()
             )
-            .count()
+            per_indicator_rows_ready = collect_counts(
+                gold_df, "indicator_id", "rows_ready"
             )
-            per_indicator_rows_ready = collect_counts(gold_df, "indicator_id", "rows_ready")
 
             DeltaTable.forName(spark, target_table).alias("tgt").merge(
                 gold_df.alias("src"),
@@ -594,26 +725,28 @@ def run_gold_macro_indicators(
         if normalized_source_system == "fred":
             series_ids = parse_series_ids(raw_series_ids)
             source_table = fred_source_table or f"{catalog}.slv_macro.fred_series_clean"
-            metadata_table = fred_metadata_table or f"{catalog}.brz_macro.raw_fred_series_metadata"
+            metadata_table = (
+                fred_metadata_table or f"{catalog}.brz_macro.raw_fred_series_metadata"
+            )
             revision_policy = "latest_available"
             ensure_table_exists(spark, source_table)
             ensure_table_exists(spark, metadata_table)
 
             silver_df = (
-            spark.table(source_table)
-            .select(
-                "series_id",
-                "observation_date",
-                "realtime_start",
-                "realtime_end",
-                "value",
-                "ingested_at",
-            )
-            .filter(F.col("series_id").isin(series_ids))
-            .filter(
-                (F.col("observation_date") >= F.lit(start_date))
-                & (F.col("observation_date") <= F.lit(end_date))
-            )
+                spark.table(source_table)
+                .select(
+                    "series_id",
+                    "observation_date",
+                    "realtime_start",
+                    "realtime_end",
+                    "value",
+                    "ingested_at",
+                )
+                .filter(F.col("series_id").isin(series_ids))
+                .filter(
+                    (F.col("observation_date") >= F.lit(start_date))
+                    & (F.col("observation_date") <= F.lit(end_date))
+                )
             )
 
             rows_read = silver_df.count()
@@ -644,41 +777,57 @@ def run_gold_macro_indicators(
                 return result
 
             metadata_window = Window.partitionBy("series_id").orderBy(
-            F.col("ingested_at").desc(),
-            F.col("payload_hash").desc(),
+                F.col("ingested_at").desc(),
+                F.col("payload_hash").desc(),
             )
             metadata_latest_df = (
                 spark.table(metadata_table)
-                .select("series_id", "units", "frequency_short", "ingested_at", "payload_hash")
+                .select(
+                    "series_id",
+                    "units",
+                    "frequency_short",
+                    "ingested_at",
+                    "payload_hash",
+                )
                 .filter(F.col("series_id").isin(series_ids))
                 .withColumn("_row_number", F.row_number().over(metadata_window))
                 .filter(F.col("_row_number") == 1)
                 .drop("_row_number")
             )
 
-            metadata_ids = {row["series_id"] for row in metadata_latest_df.select("series_id").collect()}
+            metadata_ids = {
+                row["series_id"]
+                for row in metadata_latest_df.select("series_id").collect()
+            }
             missing_metadata_ids = sorted(set(series_ids) - metadata_ids)
             if missing_metadata_ids:
                 raise RuntimeError(
-                    "Missing FRED metadata for requested series_ids: " + ", ".join(missing_metadata_ids)
+                    "Missing FRED metadata for requested series_ids: "
+                    + ", ".join(missing_metadata_ids)
                 )
 
             metadata_missing_units = [
-            row["series_id"]
-            for row in metadata_latest_df.filter(
-                F.col("units").isNull() | (F.trim(F.col("units")) == "")
-            ).select("series_id").collect()
+                row["series_id"]
+                for row in metadata_latest_df.filter(
+                    F.col("units").isNull() | (F.trim(F.col("units")) == "")
+                )
+                .select("series_id")
+                .collect()
             ]
             if metadata_missing_units:
                 raise RuntimeError(
-                    "Missing FRED units for series_ids: " + ", ".join(sorted(metadata_missing_units))
+                    "Missing FRED units for series_ids: "
+                    + ", ".join(sorted(metadata_missing_units))
                 )
 
             metadata_missing_frequency = [
-            row["series_id"]
-            for row in metadata_latest_df.filter(
-                F.col("frequency_short").isNull() | (F.trim(F.col("frequency_short")) == "")
-            ).select("series_id").collect()
+                row["series_id"]
+                for row in metadata_latest_df.filter(
+                    F.col("frequency_short").isNull()
+                    | (F.trim(F.col("frequency_short")) == "")
+                )
+                .select("series_id")
+                .collect()
             ]
             if metadata_missing_frequency:
                 raise RuntimeError(
@@ -686,14 +835,17 @@ def run_gold_macro_indicators(
                     + ", ".join(sorted(metadata_missing_frequency))
                 )
 
-            revision_window = Window.partitionBy("series_id", "observation_date").orderBy(
-            F.col("realtime_start").desc(),
-            F.col("realtime_end").desc(),
-            F.col("ingested_at").desc(),
+            revision_window = Window.partitionBy(
+                "series_id", "observation_date"
+            ).orderBy(
+                F.col("realtime_start").desc(),
+                F.col("realtime_end").desc(),
+                F.col("ingested_at").desc(),
             )
             latest_revision_df = (
-                silver_df
-                .withColumn("_row_number", F.row_number().over(revision_window))
+                silver_df.withColumn(
+                    "_row_number", F.row_number().over(revision_window)
+                )
                 .filter(F.col("_row_number") == 1)
                 .drop("_row_number")
             )
@@ -701,13 +853,14 @@ def run_gold_macro_indicators(
 
             computed_at = datetime.now(UTC)
             gold_df = (
-                latest_revision_df
-                .join(
+                latest_revision_df.join(
                     metadata_latest_df.select("series_id", "units", "frequency_short"),
                     on="series_id",
                     how="inner",
                 )
-                .withColumn("indicator_id", F.concat(F.lit("FRED_"), F.col("series_id")))
+                .withColumn(
+                    "indicator_id", F.concat(F.lit("FRED_"), F.col("series_id"))
+                )
                 .withColumn("source_system", F.lit("fred"))
                 .withColumn("indicator_group", create_indicator_group_expr(F))
                 .withColumn("unit", F.col("units"))
@@ -734,10 +887,10 @@ def run_gold_macro_indicators(
             )
 
             duplicate_key_count = (
-            gold_df.groupBy("indicator_id", "observation_date")
-            .count()
-            .filter(F.col("count") > 1)
-            .count()
+                gold_df.groupBy("indicator_id", "observation_date")
+                .count()
+                .filter(F.col("count") > 1)
+                .count()
             )
             if duplicate_key_count > 0:
                 raise RuntimeError(
@@ -746,32 +899,36 @@ def run_gold_macro_indicators(
 
             rows_ready = gold_df.count()
             existing_key_count = (
-            gold_df.select("indicator_id", "observation_date")
-            .join(
-                spark.table(target_table).select("indicator_id", "observation_date"),
-                on=["indicator_id", "observation_date"],
-                how="inner",
+                gold_df.select("indicator_id", "observation_date")
+                .join(
+                    spark.table(target_table).select(
+                        "indicator_id", "observation_date"
+                    ),
+                    on=["indicator_id", "observation_date"],
+                    how="inner",
+                )
+                .count()
             )
-            .count()
+            per_indicator_rows_ready = collect_counts(
+                gold_df, "indicator_id", "rows_ready"
             )
-            per_indicator_rows_ready = collect_counts(gold_df, "indicator_id", "rows_ready")
 
             DeltaTable.forName(spark, target_table).alias("tgt").merge(
-            gold_df.alias("src"),
-            "tgt.indicator_id = src.indicator_id AND tgt.observation_date = src.observation_date",
+                gold_df.alias("src"),
+                "tgt.indicator_id = src.indicator_id AND tgt.observation_date = src.observation_date",
             ).whenMatchedUpdate(
-            set={
-                "source_system": "src.source_system",
-                "indicator_group": "src.indicator_group",
-                "value": "src.value",
-                "unit": "src.unit",
-                "frequency": "src.frequency",
-                "is_official": "src.is_official",
-                "derivation_method": "src.derivation_method",
-                "derived_from_indicator_id": "src.derived_from_indicator_id",
-                "computed_at": "src.computed_at",
-                "run_id": "src.run_id",
-            }
+                set={
+                    "source_system": "src.source_system",
+                    "indicator_group": "src.indicator_group",
+                    "value": "src.value",
+                    "unit": "src.unit",
+                    "frequency": "src.frequency",
+                    "is_official": "src.is_official",
+                    "derivation_method": "src.derivation_method",
+                    "derived_from_indicator_id": "src.derived_from_indicator_id",
+                    "computed_at": "src.computed_at",
+                    "run_id": "src.run_id",
+                }
             ).whenNotMatchedInsertAll().execute()
 
             if display_fn is not None:
@@ -836,7 +993,9 @@ def run_gold_cross_crypto_macro_features(
     normalized_mode = mode.strip().lower()
     product_ids = parse_product_ids(raw_product_ids)
     macro_indicator_ids = parse_indicator_ids(raw_macro_indicator_ids)
-    effective_lookback_days = lookback_days_raw.strip() or str(CROSS_DEFAULT_LOOKBACK_DAYS)
+    effective_lookback_days = lookback_days_raw.strip() or str(
+        CROSS_DEFAULT_LOOKBACK_DAYS
+    )
     start_date, end_date = resolve_date_window(
         normalized_mode,
         start_date_raw,
@@ -845,7 +1004,9 @@ def run_gold_cross_crypto_macro_features(
     )
 
     returns_table = returns_table or f"{catalog}.gld_market.dp_crypto_returns_1d"
-    volatility_table = volatility_table or f"{catalog}.gld_market.dp_crypto_volatility_1d"
+    volatility_table = (
+        volatility_table or f"{catalog}.gld_market.dp_crypto_volatility_1d"
+    )
     macro_table = macro_table or f"{catalog}.gld_macro.dp_macro_indicators"
     target_table = target_table or f"{catalog}.gld_cross.dp_crypto_macro_features_1d"
 
@@ -888,7 +1049,10 @@ def run_gold_cross_crypto_macro_features(
                 "log_return_1d",
             )
             .filter(F.col("product_id").isin(product_ids))
-            .filter((F.col("feature_date") >= F.lit(start_date)) & (F.col("feature_date") <= F.lit(end_date)))
+            .filter(
+                (F.col("feature_date") >= F.lit(start_date))
+                & (F.col("feature_date") <= F.lit(end_date))
+            )
         )
         rows_market_returns_read = market_returns_df.count()
 
@@ -901,7 +1065,10 @@ def run_gold_cross_crypto_macro_features(
                 "volatility_30d",
             )
             .filter(F.col("product_id").isin(product_ids))
-            .filter((F.col("feature_date") >= F.lit(start_date)) & (F.col("feature_date") <= F.lit(end_date)))
+            .filter(
+                (F.col("feature_date") >= F.lit(start_date))
+                & (F.col("feature_date") <= F.lit(end_date))
+            )
         )
         rows_market_volatility_read = market_volatility_df.count()
 
@@ -969,7 +1136,9 @@ def run_gold_cross_crypto_macro_features(
 
         macro_source_df = (
             spark.table(macro_table)
-            .select("indicator_id", "observation_date", "value", "computed_at", "run_id")
+            .select(
+                "indicator_id", "observation_date", "value", "computed_at", "run_id"
+            )
             .filter(F.col("indicator_id").isin(macro_indicator_ids))
             .filter(F.col("observation_date") <= F.lit(end_date))
         )
@@ -1001,7 +1170,10 @@ def run_gold_cross_crypto_macro_features(
         macro_asof_candidates_df = (
             feature_dates_df.crossJoin(indicator_ids_df)
             .join(macro_source_df, on="indicator_id", how="left")
-            .filter(F.col("observation_date").isNull() | (F.col("observation_date") <= F.col("feature_date")))
+            .filter(
+                F.col("observation_date").isNull()
+                | (F.col("observation_date") <= F.col("feature_date"))
+            )
         )
 
         asof_window = Window.partitionBy("feature_date", "indicator_id").orderBy(
@@ -1010,8 +1182,9 @@ def run_gold_cross_crypto_macro_features(
             F.col("run_id").desc(),
         )
         macro_asof_df = (
-            macro_asof_candidates_df
-            .withColumn("_row_number", F.row_number().over(asof_window))
+            macro_asof_candidates_df.withColumn(
+                "_row_number", F.row_number().over(asof_window)
+            )
             .filter((F.col("_row_number") == 1) & F.col("value").isNotNull())
             .select("feature_date", "indicator_id", "value")
         )
@@ -1019,16 +1192,13 @@ def run_gold_cross_crypto_macro_features(
 
         macro_features_df = macro_asof_df.groupBy("feature_date").agg(
             F.map_from_entries(
-                F.collect_list(
-                    F.struct(F.col("indicator_id"), F.col("value"))
-                )
+                F.collect_list(F.struct(F.col("indicator_id"), F.col("value")))
             ).alias("macro_features")
         )
 
         computed_at = datetime.now(UTC)
         cross_df = (
-            market_base_df
-            .join(macro_features_df, on="feature_date", how="left")
+            market_base_df.join(macro_features_df, on="feature_date", how="left")
             .withColumn("fill_policy", F.lit(CROSS_FILL_POLICY))
             .withColumn("computed_at", F.lit(computed_at))
             .withColumn("run_id", F.lit(run_id))
