@@ -2,6 +2,7 @@
 
 from lakehouse.common.models import (
     BronzeIngestionResult,
+    CrossGoldIngestionResult,
     EcbBronzeIngestionResult,
     EcbSilverIngestionResult,
     FredBronzeIngestionResult,
@@ -15,6 +16,7 @@ from lakehouse.common.models import (
 )
 from lakehouse.common.runtime import (
     UTC,
+    parse_indicator_ids,
     parse_iso_date,
     parse_product_ids,
     parse_quote_currencies,
@@ -26,6 +28,7 @@ __all__ = [
     "LoadResult",
     "ProductIngestionStats",
     "BronzeIngestionResult",
+    "CrossGoldIngestionResult",
     "EcbBronzeIngestionResult",
     "FredSeriesIngestionStats",
     "FredBronzeIngestionResult",
@@ -35,6 +38,7 @@ __all__ = [
     "GoldIngestionResult",
     "MacroGoldIngestionResult",
     "UTC",
+    "parse_indicator_ids",
     "parse_product_ids",
     "parse_quote_currencies",
     "parse_series_ids",

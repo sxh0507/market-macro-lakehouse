@@ -2,6 +2,7 @@
 
 from lakehouse.common.models import (
     BronzeIngestionResult,
+    CrossGoldIngestionResult,
     EcbBronzeIngestionResult,
     EcbSilverIngestionResult,
     FredBronzeIngestionResult,
@@ -18,6 +19,7 @@ __all__ = [
     "LoadResult",
     "ProductIngestionStats",
     "BronzeIngestionResult",
+    "CrossGoldIngestionResult",
     "EcbBronzeIngestionResult",
     "FredSeriesIngestionStats",
     "FredBronzeIngestionResult",

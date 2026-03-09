@@ -470,3 +470,58 @@ class MacroGoldIngestionResult:
             result["rows_after_revision_collapse"] = self.rows_after_revision_collapse
 
         return result
+
+
+@dataclass(slots=True)
+class CrossGoldIngestionResult:
+    """Structured result returned by the Gold cross-domain feature pipeline."""
+
+    status: str
+    mode: str
+    product_ids: list[str]
+    macro_indicator_ids: list[str]
+    start_date: str
+    end_date: str
+    source_market_returns_table: str
+    source_market_volatility_table: str
+    source_macro_table: str
+    target_table: str
+    fill_policy: str
+    backtest_safe: bool
+    run_id: str
+    rows_market_returns_read: int = 0
+    rows_market_volatility_read: int = 0
+    rows_market_base: int = 0
+    rows_macro_selected: int = 0
+    rows_macro_asof_ready: int = 0
+    rows_ready: int = 0
+    rows_to_update: int = 0
+    rows_to_insert: int = 0
+    rows_merged: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "pipeline_name": "gold_cross_crypto_macro_features_1d",
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "mode": self.mode,
+            "product_ids": self.product_ids,
+            "macro_indicator_ids": self.macro_indicator_ids,
+            "source_market_returns_table": self.source_market_returns_table,
+            "source_market_volatility_table": self.source_market_volatility_table,
+            "source_macro_table": self.source_macro_table,
+            "target_table": self.target_table,
+            "fill_policy": self.fill_policy,
+            "backtest_safe": self.backtest_safe,
+            "rows_market_returns_read": self.rows_market_returns_read,
+            "rows_market_volatility_read": self.rows_market_volatility_read,
+            "rows_market_base": self.rows_market_base,
+            "rows_macro_selected": self.rows_macro_selected,
+            "rows_macro_asof_ready": self.rows_macro_asof_ready,
+            "rows_ready": self.rows_ready,
+            "rows_to_update": self.rows_to_update,
+            "rows_to_insert": self.rows_to_insert,
+            "rows_merged": self.rows_merged,
+            "run_id": self.run_id,
+        }

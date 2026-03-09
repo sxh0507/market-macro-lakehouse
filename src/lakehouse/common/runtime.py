@@ -42,6 +42,16 @@ def parse_series_ids(raw_value: str) -> list[str]:
     return series_ids
 
 
+def parse_indicator_ids(raw_value: str) -> list[str]:
+    """Parse a comma-separated macro indicator list into unique uppercase ids."""
+
+    indicator_ids = [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+    indicator_ids = list(dict.fromkeys(indicator_ids))
+    if not indicator_ids:
+        raise ValueError("macro_indicator_ids cannot be empty")
+    return indicator_ids
+
+
 def parse_iso_date(field_name: str, raw_value: str) -> date:
     """Parse a YYYY-MM-DD widget value."""
 

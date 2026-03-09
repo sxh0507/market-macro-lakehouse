@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from lakehouse.common.models import GoldIngestionResult, MacroGoldIngestionResult
+from lakehouse.common.models import CrossGoldIngestionResult, GoldIngestionResult, MacroGoldIngestionResult
 from lakehouse.common.runtime import (
     UTC,
+    parse_indicator_ids,
     parse_product_ids,
     parse_quote_currencies,
     parse_series_ids,
@@ -16,6 +17,8 @@ from lakehouse.common.runtime import (
 from lakehouse.observability import PipelineObserver
 
 MAX_VOLATILITY_LOOKBACK_DAYS = 90
+CROSS_DEFAULT_LOOKBACK_DAYS = 120
+CROSS_FILL_POLICY = "asof_observation_date_ffill_v1"
 FRED_INDICATOR_GROUPS = {
     "CPIAUCSL": "inflation",
     "FEDFUNDS": "policy_rate",
@@ -806,3 +809,321 @@ def run_gold_macro_indicators(
             return result
 
         raise ValueError("source_system must be one of: ecb, fred")
+
+
+def run_gold_cross_crypto_macro_features(
+    spark: Any,
+    raw_product_ids: str,
+    raw_macro_indicator_ids: str,
+    mode: str,
+    start_date_raw: str,
+    end_date_raw: str,
+    lookback_days_raw: str,
+    run_id: str,
+    catalog: str = "market_macro",
+    returns_table: str | None = None,
+    volatility_table: str | None = None,
+    macro_table: str | None = None,
+    target_table: str | None = None,
+    display_fn: Callable[[Any], None] | None = None,
+) -> CrossGoldIngestionResult:
+    """Run the Gold cross-domain crypto + macro feature pipeline."""
+
+    from delta.tables import DeltaTable  # type: ignore import-not-found
+    from pyspark.sql import functions as F  # type: ignore import-not-found
+    from pyspark.sql.window import Window  # type: ignore import-not-found
+
+    normalized_mode = mode.strip().lower()
+    product_ids = parse_product_ids(raw_product_ids)
+    macro_indicator_ids = parse_indicator_ids(raw_macro_indicator_ids)
+    effective_lookback_days = lookback_days_raw.strip() or str(CROSS_DEFAULT_LOOKBACK_DAYS)
+    start_date, end_date = resolve_date_window(
+        normalized_mode,
+        start_date_raw,
+        end_date_raw,
+        effective_lookback_days,
+    )
+
+    returns_table = returns_table or f"{catalog}.gld_market.dp_crypto_returns_1d"
+    volatility_table = volatility_table or f"{catalog}.gld_market.dp_crypto_volatility_1d"
+    macro_table = macro_table or f"{catalog}.gld_macro.dp_macro_indicators"
+    target_table = target_table or f"{catalog}.gld_cross.dp_crypto_macro_features_1d"
+
+    ensure_table_exists(spark, returns_table)
+    ensure_table_exists(spark, volatility_table)
+    ensure_table_exists(spark, macro_table)
+    ensure_table_exists(spark, target_table)
+
+    observer = PipelineObserver(
+        spark=spark,
+        catalog=catalog,
+        pipeline_name="gold_cross_crypto_macro_features_1d",
+        layer="gold",
+        source_name="cross",
+        target_table=target_table,
+        run_id=run_id,
+        start_metadata={
+            "mode": normalized_mode,
+            "product_ids": product_ids,
+            "macro_indicator_ids": macro_indicator_ids,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "fill_policy": CROSS_FILL_POLICY,
+            "backtest_safe": False,
+            "returns_table": returns_table,
+            "volatility_table": volatility_table,
+            "macro_table": macro_table,
+        },
+    )
+
+    with observer:
+        market_returns_df = (
+            spark.table(returns_table)
+            .select(
+                "product_id",
+                F.col("bar_date").alias("feature_date"),
+                "base_asset",
+                "quote_currency",
+                "simple_return_1d",
+                "log_return_1d",
+            )
+            .filter(F.col("product_id").isin(product_ids))
+            .filter((F.col("feature_date") >= F.lit(start_date)) & (F.col("feature_date") <= F.lit(end_date)))
+        )
+        rows_market_returns_read = market_returns_df.count()
+
+        market_volatility_df = (
+            spark.table(volatility_table)
+            .select(
+                "product_id",
+                F.col("bar_date").alias("feature_date"),
+                "volatility_7d",
+                "volatility_30d",
+            )
+            .filter(F.col("product_id").isin(product_ids))
+            .filter((F.col("feature_date") >= F.lit(start_date)) & (F.col("feature_date") <= F.lit(end_date)))
+        )
+        rows_market_volatility_read = market_volatility_df.count()
+
+        rows_read = rows_market_returns_read + rows_market_volatility_read
+        observer.update_progress(rows_read=rows_read)
+
+        if rows_market_returns_read == 0:
+            result = CrossGoldIngestionResult(
+                status="success_empty",
+                mode=normalized_mode,
+                product_ids=product_ids,
+                macro_indicator_ids=macro_indicator_ids,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                source_market_returns_table=returns_table,
+                source_market_volatility_table=volatility_table,
+                source_macro_table=macro_table,
+                target_table=target_table,
+                fill_policy=CROSS_FILL_POLICY,
+                backtest_safe=False,
+                run_id=run_id,
+                rows_market_returns_read=rows_market_returns_read,
+                rows_market_volatility_read=rows_market_volatility_read,
+            )
+            observer.succeed(
+                status=result.status,
+                rows_read=rows_read,
+                rows_written=result.rows_merged,
+                metadata=result.as_dict(),
+                watermark_type="feature_date",
+                watermark_column="feature_date",
+            )
+            return result
+
+        market_base_df = (
+            market_returns_df.alias("ret")
+            .join(
+                market_volatility_df.alias("vol"),
+                on=["product_id", "feature_date"],
+                how="left",
+            )
+            .select(
+                "product_id",
+                "feature_date",
+                "base_asset",
+                "quote_currency",
+                "simple_return_1d",
+                "log_return_1d",
+                "volatility_7d",
+                "volatility_30d",
+            )
+        )
+        rows_market_base = market_base_df.count()
+
+        duplicate_market_key_count = (
+            market_base_df.groupBy("feature_date", "product_id")
+            .count()
+            .filter(F.col("count") > 1)
+            .count()
+        )
+        if duplicate_market_key_count > 0:
+            raise RuntimeError(
+                f"Detected {duplicate_market_key_count} duplicate market feature keys before macro alignment."
+            )
+
+        macro_source_df = (
+            spark.table(macro_table)
+            .select("indicator_id", "observation_date", "value", "computed_at", "run_id")
+            .filter(F.col("indicator_id").isin(macro_indicator_ids))
+            .filter(F.col("observation_date") <= F.lit(end_date))
+        )
+        rows_macro_selected = macro_source_df.count()
+        rows_read += rows_macro_selected
+        observer.update_progress(rows_read=rows_read)
+
+        available_macro_indicator_ids = [
+            row["indicator_id"]
+            for row in macro_source_df.select("indicator_id").distinct().collect()
+        ]
+        missing_macro_indicator_ids = [
+            indicator_id
+            for indicator_id in macro_indicator_ids
+            if indicator_id not in available_macro_indicator_ids
+        ]
+        if missing_macro_indicator_ids:
+            raise RuntimeError(
+                "Missing requested macro indicators in gld_macro.dp_macro_indicators: "
+                + ", ".join(missing_macro_indicator_ids)
+            )
+
+        feature_dates_df = market_base_df.select("feature_date").distinct()
+        indicator_ids_df = spark.createDataFrame(
+            [(indicator_id,) for indicator_id in macro_indicator_ids],
+            ["indicator_id"],
+        )
+
+        macro_asof_candidates_df = (
+            feature_dates_df.crossJoin(indicator_ids_df)
+            .join(macro_source_df, on="indicator_id", how="left")
+            .filter(F.col("observation_date").isNull() | (F.col("observation_date") <= F.col("feature_date")))
+        )
+
+        asof_window = Window.partitionBy("feature_date", "indicator_id").orderBy(
+            F.col("observation_date").desc(),
+            F.col("computed_at").desc(),
+            F.col("run_id").desc(),
+        )
+        macro_asof_df = (
+            macro_asof_candidates_df
+            .withColumn("_row_number", F.row_number().over(asof_window))
+            .filter((F.col("_row_number") == 1) & F.col("value").isNotNull())
+            .select("feature_date", "indicator_id", "value")
+        )
+        rows_macro_asof_ready = macro_asof_df.count()
+
+        macro_features_df = macro_asof_df.groupBy("feature_date").agg(
+            F.map_from_entries(
+                F.collect_list(
+                    F.struct(F.col("indicator_id"), F.col("value"))
+                )
+            ).alias("macro_features")
+        )
+
+        computed_at = datetime.now(UTC)
+        cross_df = (
+            market_base_df
+            .join(macro_features_df, on="feature_date", how="left")
+            .withColumn("fill_policy", F.lit(CROSS_FILL_POLICY))
+            .withColumn("computed_at", F.lit(computed_at))
+            .withColumn("run_id", F.lit(run_id))
+            .select(
+                "feature_date",
+                "product_id",
+                "base_asset",
+                "quote_currency",
+                "simple_return_1d",
+                "log_return_1d",
+                "volatility_7d",
+                "volatility_30d",
+                "macro_features",
+                "fill_policy",
+                "computed_at",
+                "run_id",
+            )
+        )
+        rows_ready = cross_df.count()
+
+        duplicate_cross_key_count = (
+            cross_df.groupBy("feature_date", "product_id")
+            .count()
+            .filter(F.col("count") > 1)
+            .count()
+        )
+        if duplicate_cross_key_count > 0:
+            raise RuntimeError(
+                f"Detected {duplicate_cross_key_count} duplicate cross feature keys after macro alignment."
+            )
+
+        existing_key_count = (
+            cross_df.select("feature_date", "product_id")
+            .join(
+                spark.table(target_table).select("feature_date", "product_id"),
+                on=["feature_date", "product_id"],
+                how="inner",
+            )
+            .count()
+            if rows_ready > 0
+            else 0
+        )
+
+        if rows_ready > 0:
+            DeltaTable.forName(spark, target_table).alias("tgt").merge(
+                cross_df.alias("src"),
+                "tgt.feature_date = src.feature_date AND tgt.product_id = src.product_id",
+            ).whenMatchedUpdate(
+                set={
+                    "base_asset": "src.base_asset",
+                    "quote_currency": "src.quote_currency",
+                    "simple_return_1d": "src.simple_return_1d",
+                    "log_return_1d": "src.log_return_1d",
+                    "volatility_7d": "src.volatility_7d",
+                    "volatility_30d": "src.volatility_30d",
+                    "macro_features": "src.macro_features",
+                    "fill_policy": "src.fill_policy",
+                    "computed_at": "src.computed_at",
+                    "run_id": "src.run_id",
+                }
+            ).whenNotMatchedInsertAll().execute()
+
+        if display_fn is not None:
+            display_fn(cross_df.orderBy("product_id", "feature_date"))
+
+        result = CrossGoldIngestionResult(
+            status="success",
+            mode=normalized_mode,
+            product_ids=product_ids,
+            macro_indicator_ids=macro_indicator_ids,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            source_market_returns_table=returns_table,
+            source_market_volatility_table=volatility_table,
+            source_macro_table=macro_table,
+            target_table=target_table,
+            fill_policy=CROSS_FILL_POLICY,
+            backtest_safe=False,
+            run_id=run_id,
+            rows_market_returns_read=rows_market_returns_read,
+            rows_market_volatility_read=rows_market_volatility_read,
+            rows_market_base=rows_market_base,
+            rows_macro_selected=rows_macro_selected,
+            rows_macro_asof_ready=rows_macro_asof_ready,
+            rows_ready=rows_ready,
+            rows_to_update=existing_key_count,
+            rows_to_insert=rows_ready - existing_key_count,
+            rows_merged=rows_ready,
+        )
+        observer.succeed(
+            status=result.status,
+            rows_read=rows_read,
+            rows_written=result.rows_merged,
+            metadata=result.as_dict(),
+            watermark_type="feature_date",
+            watermark_column="feature_date",
+        )
+        return result
