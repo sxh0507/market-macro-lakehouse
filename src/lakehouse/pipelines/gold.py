@@ -1162,9 +1162,10 @@ def run_gold_cross_crypto_macro_features(
             )
 
         feature_dates_df = market_base_df.select("feature_date").distinct()
-        indicator_ids_df = spark.createDataFrame(
-            [(indicator_id,) for indicator_id in macro_indicator_ids],
-            ["indicator_id"],
+        indicator_ids_df = spark.range(1).select(
+            F.explode(
+                F.array(*[F.lit(indicator_id) for indicator_id in macro_indicator_ids])
+            ).alias("indicator_id")
         )
 
         macro_asof_candidates_df = (

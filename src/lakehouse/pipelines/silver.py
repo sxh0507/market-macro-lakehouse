@@ -913,10 +913,13 @@ def run_silver_fred_series_clean(
         )
 
         if available_metadata_ids:
-            metadata_flags_df = spark.createDataFrame(
-                [(series_id,) for series_id in sorted(available_metadata_ids)],
-                "series_id string",
-            ).withColumn("metadata_present", F.lit(True))
+            metadata_flags_df = (
+                spark.table(metadata_table)
+                .select("series_id")
+                .filter(F.col("series_id").isin(sorted(available_metadata_ids)))
+                .dropDuplicates()
+                .withColumn("metadata_present", F.lit(True))
+            )
             assessed_df = bronze_latest_df.join(
                 metadata_flags_df, on="series_id", how="left"
             )
