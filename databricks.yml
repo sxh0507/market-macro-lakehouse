@@ -40,13 +40,6 @@ variables:
   daily_job_pause_status:
     description: Initial schedule pause status
     default: PAUSED
-  job_cluster_spark_version:
-    description: Databricks Runtime version for the shared job cluster
-  job_cluster_node_type_id:
-    description: Cloud-specific node type id for the shared job cluster
-  job_cluster_num_workers:
-    description: Number of workers for the shared job cluster
-    default: 1
 
 targets:
   dev:
