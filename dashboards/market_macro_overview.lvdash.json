@@ -131,7 +131,7 @@
       "layout": [
         {
           "widget": {
-            "name": "bbdb20a5",
+            "name": "pipeline-freshness",
             "queries": [
               {
                 "name": "main_query",
@@ -177,6 +177,10 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Pipeline Freshness"
+              },
               "widgetType": "table",
               "encodings": {
                 "columns": [
@@ -217,7 +221,7 @@
         },
         {
           "widget": {
-            "name": "cd18873f",
+            "name": "recent-pipeline-runs",
             "queries": [
               {
                 "name": "main_query",
@@ -275,6 +279,10 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Recent Pipeline Runs"
+              },
               "widgetType": "table",
               "encodings": {
                 "columns": [
@@ -324,7 +332,7 @@
         },
         {
           "widget": {
-            "name": "ed592bc7",
+            "name": "crypto-market-snapshot",
             "queries": [
               {
                 "name": "main_query",
@@ -370,6 +378,10 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Crypto Market Snapshot"
+              },
               "widgetType": "table",
               "encodings": {
                 "columns": [
@@ -410,7 +422,7 @@
         },
         {
           "widget": {
-            "name": "3479ef20",
+            "name": "cross-feature-snapshot",
             "queries": [
               {
                 "name": "main_query",
@@ -456,6 +468,10 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Cross Feature Snapshot"
+              },
               "widgetType": "table",
               "encodings": {
                 "columns": [
@@ -496,7 +512,7 @@
         },
         {
           "widget": {
-            "name": "6b566971",
+            "name": "macro-indicator-latest",
             "queries": [
               {
                 "name": "main_query",
@@ -546,6 +562,10 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Macro Indicator Latest"
+              },
               "widgetType": "table",
               "encodings": {
                 "columns": [
