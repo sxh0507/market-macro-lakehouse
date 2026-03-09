@@ -930,7 +930,7 @@ def run_silver_fred_series_clean(
 
         assessed_df = assessed_df.withColumn("dq_reason", build_fred_dq_reason_expr(F))
         rows_structural_invalid = assessed_df.filter(
-            F.col("dq_reason").isin(FRED_STRUCTURAL_DQ_REASONS)
+            F.col("dq_reason").isin(*FRED_STRUCTURAL_DQ_REASONS)
         ).count()
 
         rejected_df = assessed_df.filter(F.col("dq_reason").isNotNull())
