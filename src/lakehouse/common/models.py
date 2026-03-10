@@ -525,3 +525,51 @@ class CrossGoldIngestionResult:
             "rows_merged": self.rows_merged,
             "run_id": self.run_id,
         }
+
+
+@dataclass(slots=True)
+class ObservabilityIngestionResult:
+    """Structured result returned by the observability summary pipeline."""
+
+    status: str
+    pipeline_name: str
+    catalog: str
+    run_id: str
+    state_table: str
+    dq_metrics_table: str
+    run_log_table: str
+    pipelines_observed: int
+    pipelines_with_state: int
+    pipelines_missing_state: list[str] = field(default_factory=list)
+    dq_source_tables: int = 0
+    dq_source_rows_read: int = 0
+    dq_rows_ready: int = 0
+    dq_rows_to_update: int = 0
+    dq_rows_to_insert: int = 0
+    dq_rows_merged: int = 0
+    total_observed_rows: int = 0
+    pipelines_without_rows: list[str] = field(default_factory=list)
+    per_pipeline_observed_rows: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "pipeline_name": self.pipeline_name,
+            "catalog": self.catalog,
+            "run_id": self.run_id,
+            "state_table": self.state_table,
+            "dq_metrics_table": self.dq_metrics_table,
+            "run_log_table": self.run_log_table,
+            "pipelines_observed": self.pipelines_observed,
+            "pipelines_with_state": self.pipelines_with_state,
+            "pipelines_missing_state": self.pipelines_missing_state,
+            "dq_source_tables": self.dq_source_tables,
+            "dq_source_rows_read": self.dq_source_rows_read,
+            "dq_rows_ready": self.dq_rows_ready,
+            "dq_rows_to_update": self.dq_rows_to_update,
+            "dq_rows_to_insert": self.dq_rows_to_insert,
+            "dq_rows_merged": self.dq_rows_merged,
+            "total_observed_rows": self.total_observed_rows,
+            "pipelines_without_rows": self.pipelines_without_rows,
+            "per_pipeline_observed_rows": self.per_pipeline_observed_rows,
+        }

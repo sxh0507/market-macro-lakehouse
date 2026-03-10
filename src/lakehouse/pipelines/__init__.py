@@ -11,6 +11,7 @@ from lakehouse.pipelines.gold import (
     run_gold_crypto_returns_and_volatility,
     run_gold_macro_indicators,
 )
+from lakehouse.pipelines.obs import run_pipeline_observability_metrics
 from lakehouse.pipelines.silver import (
     run_silver_crypto_ohlc_1d,
     run_silver_ecb_fx_ref_rates_daily,
@@ -28,4 +29,5 @@ __all__ = [
     "run_gold_crypto_returns_and_volatility",
     "run_gold_macro_indicators",
     "run_gold_cross_crypto_macro_features",
+    "run_pipeline_observability_metrics",
 ]
