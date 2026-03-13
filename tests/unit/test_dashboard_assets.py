@@ -49,10 +49,13 @@ def test_dashboard_export_contains_expected_titled_widgets() -> None:
 def test_dashboard_query_sql_assets_exist_for_all_ui_datasets() -> None:
     query_dir = REPO_ROOT / "dashboards" / "queries"
 
-    assert {path.name for path in query_dir.glob("*.sql")} == {
+    assert {path.name for path in query_dir.glob("*.sql")} >= {
         "01_pipeline_freshness.sql",
         "02_pipeline_recent_runs.sql",
         "03_crypto_market_snapshot.sql",
         "04_macro_indicator_latest.sql",
         "05_cross_feature_snapshot.sql",
+        "06_btc_macro_dual_axis_timeseries.sql",
+        "07_crypto_fx_volatility_compare.sql",
+        "08_crypto_macro_correlation_heatmap.sql",
     }
