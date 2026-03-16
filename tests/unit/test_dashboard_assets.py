@@ -24,13 +24,18 @@ def test_dashboard_export_contains_expected_datasets() -> None:
         "Crypto Market Snapshot",
         "Macro Indicator Latest",
         "Cross Feature Snapshot",
+        "BTC_Marco",
+        "Crypto vs FX",
+        "Crypto_Macro_Heatmap",
+        "Top_Crypto_Movers",
+        "Latest_Macro_Signals",
     }
 
 
 def test_dashboard_export_contains_expected_titled_widgets() -> None:
     parsed = json.loads(DASHBOARD_PATH.read_text())
     titled_widgets = {
-        widget["spec"]["frame"]["title"]
+        widget["spec"]["frame"]["title"].strip()
         for page in parsed["pages"]
         for item in page.get("layout", [])
         for widget in [item.get("widget", {})]
@@ -43,6 +48,16 @@ def test_dashboard_export_contains_expected_titled_widgets() -> None:
         "Crypto Market Snapshot",
         "Cross Feature Snapshot",
         "Macro Indicator Latest",
+        "BTC Price Index vs Fed Funds Rate",
+        "BTC vs EUR/USD Volatility Regime",
+        "BTC Rolling Correlation vs Macro",
+        "Top Gainer",
+        "2nd Gainer",
+        "Top Loser",
+        "2nd Loser",
+        "Latest US CPI",
+        "Latest Fed Funds",
+        "Latest EUR/USD Move",
     }
 
 
@@ -58,4 +73,6 @@ def test_dashboard_query_sql_assets_exist_for_all_ui_datasets() -> None:
         "06_btc_macro_dual_axis_timeseries.sql",
         "07_crypto_fx_volatility_compare.sql",
         "08_crypto_macro_correlation_heatmap.sql",
+        "10_top_crypto_movers.sql",
+        "11_latest_macro_signals.sql",
     }

@@ -122,12 +122,495 @@
         "  ON c.feature_date = d.latest_feature_date\n",
         "ORDER BY c.product_id;"
       ]
+    },
+    {
+      "name": "21f8c844",
+      "displayName": "BTC_Marco",
+      "queryLines": [
+        "WITH btc_cross AS (\n",
+        "  SELECT\n",
+        "    c.feature_date,\n",
+        "    c.product_id,\n",
+        "    c.log_return_1d,\n",
+        "    c.fill_policy,\n",
+        "    c.macro_features['FRED_FEDFUNDS'] AS fedfunds_value,\n",
+        "    c.macro_features['FRED_CPIAUCSL'] AS cpi_value\n",
+        "  FROM market_macro.gld_cross.dp_crypto_macro_features_1d AS c\n",
+        "  WHERE c.product_id = 'BTC-USD'\n",
+        "),\n",
+        "btc_dual_axis AS (\n",
+        "  SELECT\n",
+        "    feature_date,\n",
+        "    product_id,\n",
+        "    log_return_1d AS btc_log_return_1d,\n",
+        "    SUM(COALESCE(log_return_1d, 0.0)) OVER (\n",
+        "      ORDER BY feature_date\n",
+        "      ROWS BETWEEN 29 PRECEDING AND CURRENT ROW\n",
+        "    ) AS btc_cum_log_return_30d,\n",
+        "    EXP(SUM(COALESCE(log_return_1d, 0.0)) OVER (\n",
+        "      ORDER BY feature_date\n",
+        "      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n",
+        "    )) * 100.0 AS btc_price_index_100,\n",
+        "    fedfunds_value,\n",
+        "    cpi_value,\n",
+        "    fill_policy,\n",
+        "    false AS backtest_safe\n",
+        "  FROM btc_cross\n",
+        ")\n",
+        "SELECT\n",
+        "  feature_date,\n",
+        "  product_id,\n",
+        "  btc_log_return_1d,\n",
+        "  btc_cum_log_return_30d,\n",
+        "  btc_price_index_100,\n",
+        "  fedfunds_value,\n",
+        "  cpi_value,\n",
+        "  fill_policy,\n",
+        "  backtest_safe\n",
+        "FROM btc_dual_axis\n",
+        "ORDER BY feature_date;\n"
+      ]
+    },
+    {
+      "name": "11210f45",
+      "displayName": "Crypto vs FX",
+      "queryLines": [
+        "WITH btc_volatility AS (\n",
+        "  SELECT\n",
+        "    v.bar_date AS observation_date,\n",
+        "    v.product_id,\n",
+        "    v.volatility_30d AS btc_volatility_30d\n",
+        "  FROM market_macro.gld_market.dp_crypto_volatility_1d AS v\n",
+        "  WHERE v.product_id = 'BTC-USD'\n",
+        "),\n",
+        "eurusd_base AS (\n",
+        "  SELECT\n",
+        "    m.observation_date,\n",
+        "    m.value AS eurusd_rate,\n",
+        "    LAG(m.value) OVER (ORDER BY m.observation_date) AS prev_eurusd_rate\n",
+        "  FROM market_macro.gld_macro.dp_macro_indicators AS m\n",
+        "  WHERE m.indicator_id = 'ECB_FX_REF_EUR_USD'\n",
+        "),\n",
+        "eurusd_returns AS (\n",
+        "  SELECT\n",
+        "    observation_date,\n",
+        "    eurusd_rate,\n",
+        "    CASE\n",
+        "      WHEN prev_eurusd_rate IS NULL OR prev_eurusd_rate <= 0 OR eurusd_rate <= 0 THEN NULL\n",
+        "      ELSE LN(eurusd_rate / prev_eurusd_rate)\n",
+        "    END AS eurusd_log_return_1d\n",
+        "  FROM eurusd_base\n",
+        "),\n",
+        "eurusd_volatility AS (\n",
+        "  SELECT\n",
+        "    observation_date,\n",
+        "    eurusd_rate,\n",
+        "    eurusd_log_return_1d,\n",
+        "    STDDEV_SAMP(eurusd_log_return_1d) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "      ROWS BETWEEN 29 PRECEDING AND CURRENT ROW\n",
+        "    ) AS eurusd_volatility_30d\n",
+        "  FROM eurusd_returns\n",
+        "),\n",
+        "joined_volatility AS (\n",
+        "  SELECT\n",
+        "    b.observation_date,\n",
+        "    b.product_id,\n",
+        "    b.btc_volatility_30d,\n",
+        "    e.eurusd_rate,\n",
+        "    e.eurusd_log_return_1d,\n",
+        "    e.eurusd_volatility_30d\n",
+        "  FROM btc_volatility AS b\n",
+        "  INNER JOIN eurusd_volatility AS e\n",
+        "    ON b.observation_date = e.observation_date\n",
+        "),\n",
+        "normalized_volatility AS (\n",
+        "  SELECT\n",
+        "    observation_date,\n",
+        "    product_id,\n",
+        "    btc_volatility_30d,\n",
+        "    eurusd_rate,\n",
+        "    eurusd_log_return_1d,\n",
+        "    eurusd_volatility_30d,\n",
+        "    (btc_volatility_30d - AVG(btc_volatility_30d) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "      ROWS BETWEEN 89 PRECEDING AND CURRENT ROW\n",
+        "    )) / NULLIF(STDDEV_SAMP(btc_volatility_30d) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "      ROWS BETWEEN 89 PRECEDING AND CURRENT ROW\n",
+        "    ), 0.0) AS btc_volatility_30d_zscore_90d,\n",
+        "    (eurusd_volatility_30d - AVG(eurusd_volatility_30d) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "      ROWS BETWEEN 89 PRECEDING AND CURRENT ROW\n",
+        "    )) / NULLIF(STDDEV_SAMP(eurusd_volatility_30d) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "      ROWS BETWEEN 89 PRECEDING AND CURRENT ROW\n",
+        "    ), 0.0) AS eurusd_volatility_30d_zscore_90d\n",
+        "  FROM joined_volatility\n",
+        ")\n",
+        "SELECT\n",
+        "  observation_date,\n",
+        "  product_id,\n",
+        "  btc_volatility_30d,\n",
+        "  eurusd_rate,\n",
+        "  eurusd_log_return_1d,\n",
+        "  eurusd_volatility_30d,\n",
+        "  btc_volatility_30d_zscore_90d,\n",
+        "  eurusd_volatility_30d_zscore_90d\n",
+        "FROM normalized_volatility\n",
+        "ORDER BY observation_date;\n"
+      ]
+    },
+    {
+      "name": "c795da62",
+      "displayName": "Crypto_Macro_Heatmap",
+      "queryLines": [
+        "WITH btc_features AS (\n",
+        "  SELECT\n",
+        "    c.feature_date,\n",
+        "    c.product_id,\n",
+        "    c.log_return_1d AS crypto_log_return_1d,\n",
+        "    c.fill_policy,\n",
+        "    c.macro_features\n",
+        "  FROM market_macro.gld_cross.dp_crypto_macro_features_1d AS c\n",
+        "  WHERE c.product_id = 'BTC-USD'\n",
+        "),\n",
+        "macro_long AS (\n",
+        "  SELECT\n",
+        "    f.feature_date,\n",
+        "    f.product_id,\n",
+        "    f.crypto_log_return_1d,\n",
+        "    f.fill_policy,\n",
+        "    kv.key AS indicator_id,\n",
+        "    kv.value AS macro_value\n",
+        "  FROM btc_features AS f\n",
+        "  LATERAL VIEW EXPLODE(MAP_ENTRIES(f.macro_features)) exploded AS kv\n",
+        "  WHERE kv.key IN (\n",
+        "    'ECB_FX_REF_EUR_USD',\n",
+        "    'FRED_FEDFUNDS',\n",
+        "    'FRED_CPIAUCSL'\n",
+        "  )\n",
+        "),\n",
+        "macro_labeled AS (\n",
+        "  SELECT\n",
+        "    feature_date,\n",
+        "    product_id,\n",
+        "    crypto_log_return_1d,\n",
+        "    fill_policy,\n",
+        "    indicator_id,\n",
+        "    CASE\n",
+        "      WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 'EUR/USD'\n",
+        "      WHEN indicator_id = 'FRED_FEDFUNDS' THEN 'Fed Funds'\n",
+        "      WHEN indicator_id = 'FRED_CPIAUCSL' THEN 'US CPI'\n",
+        "      ELSE indicator_id\n",
+        "    END AS indicator_label,\n",
+        "    CASE\n",
+        "      WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 'fx_ref_rate'\n",
+        "      WHEN indicator_id = 'FRED_FEDFUNDS' THEN 'policy_rate'\n",
+        "      WHEN indicator_id = 'FRED_CPIAUCSL' THEN 'inflation'\n",
+        "      ELSE 'other'\n",
+        "    END AS indicator_group,\n",
+        "    CASE\n",
+        "      WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 1\n",
+        "      WHEN indicator_id = 'FRED_CPIAUCSL' THEN 2\n",
+        "      WHEN indicator_id = 'FRED_FEDFUNDS' THEN 3\n",
+        "      ELSE 99\n",
+        "    END AS sort_order,\n",
+        "    macro_value\n",
+        "  FROM macro_long\n",
+        "  WHERE crypto_log_return_1d IS NOT NULL\n",
+        "    AND macro_value IS NOT NULL\n",
+        "),\n",
+        "rolling_stats AS (\n",
+        "  SELECT\n",
+        "    feature_date,\n",
+        "    product_id,\n",
+        "    indicator_id,\n",
+        "    indicator_label,\n",
+        "    indicator_group,\n",
+        "    sort_order,\n",
+        "    macro_value,\n",
+        "    crypto_log_return_1d,\n",
+        "    fill_policy,\n",
+        "    COUNT(*) OVER w AS window_count,\n",
+        "    SUM(crypto_log_return_1d) OVER w AS sum_x,\n",
+        "    SUM(macro_value) OVER w AS sum_y,\n",
+        "    SUM(crypto_log_return_1d * crypto_log_return_1d) OVER w AS sum_x2,\n",
+        "    SUM(macro_value * macro_value) OVER w AS sum_y2,\n",
+        "    SUM(crypto_log_return_1d * macro_value) OVER w AS sum_xy\n",
+        "  FROM macro_labeled\n",
+        "  WINDOW w AS (\n",
+        "    PARTITION BY product_id, indicator_id\n",
+        "    ORDER BY feature_date\n",
+        "    ROWS BETWEEN 89 PRECEDING AND CURRENT ROW\n",
+        "  )\n",
+        "),\n",
+        "raw_correlations AS (\n",
+        "  SELECT\n",
+        "    feature_date,\n",
+        "    product_id,\n",
+        "    indicator_id,\n",
+        "    indicator_label,\n",
+        "    indicator_group,\n",
+        "    sort_order,\n",
+        "    macro_value,\n",
+        "    crypto_log_return_1d,\n",
+        "    fill_policy,\n",
+        "    CASE\n",
+        "      WHEN window_count < 90 THEN NULL\n",
+        "      WHEN ((window_count * sum_x2 - sum_x * sum_x) <= 0)\n",
+        "        OR ((window_count * sum_y2 - sum_y * sum_y) <= 0) THEN NULL\n",
+        "      ELSE\n",
+        "        (window_count * sum_xy - sum_x * sum_y)\n",
+        "        / SQRT(\n",
+        "          (window_count * sum_x2 - sum_x * sum_x)\n",
+        "          * (window_count * sum_y2 - sum_y * sum_y)\n",
+        "        )\n",
+        "    END AS rolling_corr_90d\n",
+        "  FROM rolling_stats\n",
+        ")\n",
+        "SELECT\n",
+        "  feature_date,\n",
+        "  product_id,\n",
+        "  indicator_id,\n",
+        "  indicator_label,\n",
+        "  indicator_group,\n",
+        "  sort_order,\n",
+        "  macro_value,\n",
+        "  crypto_log_return_1d,\n",
+        "  rolling_corr_90d,\n",
+        "  AVG(rolling_corr_90d) OVER (\n",
+        "    PARTITION BY product_id, indicator_id\n",
+        "    ORDER BY feature_date\n",
+        "    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW\n",
+        "  ) AS rolling_corr_90d_smoothed_7d,\n",
+        "  fill_policy,\n",
+        "  false AS backtest_safe\n",
+        "FROM raw_correlations\n",
+        "ORDER BY sort_order, feature_date;\n"
+      ]
+    },
+    {
+      "name": "38be28c0",
+      "displayName": "Top_Crypto_Movers",
+      "queryLines": [
+        "WITH latest_market_date AS (\n",
+        "  SELECT MAX(bar_date) AS latest_bar_date\n",
+        "  FROM market_macro.gld_market.dp_crypto_returns_1d\n",
+        "),\n",
+        "daily_returns AS (\n",
+        "  SELECT\n",
+        "    r.bar_date,\n",
+        "    r.product_id,\n",
+        "    r.base_asset,\n",
+        "    r.quote_currency,\n",
+        "    r.close,\n",
+        "    r.simple_return_1d,\n",
+        "    r.log_return_1d,\n",
+        "    ROUND(r.simple_return_1d * 100, 2) AS simple_return_1d_pct\n",
+        "  FROM market_macro.gld_market.dp_crypto_returns_1d AS r\n",
+        "  INNER JOIN latest_market_date AS d\n",
+        "    ON r.bar_date = d.latest_bar_date\n",
+        "  WHERE r.simple_return_1d IS NOT NULL\n",
+        "),\n",
+        "gainers AS (\n",
+        "  SELECT\n",
+        "    bar_date,\n",
+        "    product_id,\n",
+        "    base_asset,\n",
+        "    quote_currency,\n",
+        "    close,\n",
+        "    simple_return_1d,\n",
+        "    log_return_1d,\n",
+        "    simple_return_1d_pct,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      ORDER BY simple_return_1d DESC, product_id\n",
+        "    ) AS rank_in_group\n",
+        "  FROM daily_returns\n",
+        "),\n",
+        "losers AS (\n",
+        "  SELECT\n",
+        "    bar_date,\n",
+        "    product_id,\n",
+        "    base_asset,\n",
+        "    quote_currency,\n",
+        "    close,\n",
+        "    simple_return_1d,\n",
+        "    log_return_1d,\n",
+        "    simple_return_1d_pct,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      ORDER BY simple_return_1d ASC, product_id\n",
+        "    ) AS rank_in_group\n",
+        "  FROM daily_returns\n",
+        "),\n",
+        "selected_movers AS (\n",
+        "  SELECT\n",
+        "    bar_date,\n",
+        "    CASE\n",
+        "      WHEN rank_in_group = 1 THEN 'Top Gainer'\n",
+        "      ELSE '2nd Gainer'\n",
+        "    END AS card_title,\n",
+        "    'gainer' AS mover_group,\n",
+        "    CASE\n",
+        "      WHEN rank_in_group = 1 THEN 1\n",
+        "      ELSE 2\n",
+        "    END AS sort_order,\n",
+        "    product_id,\n",
+        "    base_asset,\n",
+        "    quote_currency,\n",
+        "    close,\n",
+        "    simple_return_1d,\n",
+        "    log_return_1d,\n",
+        "    simple_return_1d_pct\n",
+        "  FROM gainers\n",
+        "  WHERE rank_in_group <= 2\n",
+        "\n",
+        "  UNION ALL\n",
+        "\n",
+        "  SELECT\n",
+        "    bar_date,\n",
+        "    CASE\n",
+        "      WHEN rank_in_group = 1 THEN 'Top Loser'\n",
+        "      ELSE '2nd Loser'\n",
+        "    END AS card_title,\n",
+        "    'loser' AS mover_group,\n",
+        "    CASE\n",
+        "      WHEN rank_in_group = 1 THEN 3\n",
+        "      ELSE 4\n",
+        "    END AS sort_order,\n",
+        "    product_id,\n",
+        "    base_asset,\n",
+        "    quote_currency,\n",
+        "    close,\n",
+        "    simple_return_1d,\n",
+        "    log_return_1d,\n",
+        "    simple_return_1d_pct\n",
+        "  FROM losers\n",
+        "  WHERE rank_in_group <= 2\n",
+        ")\n",
+        "SELECT\n",
+        "  bar_date,\n",
+        "  card_title,\n",
+        "  mover_group,\n",
+        "  sort_order,\n",
+        "  product_id,\n",
+        "  base_asset,\n",
+        "  quote_currency,\n",
+        "  close,\n",
+        "  simple_return_1d,\n",
+        "  log_return_1d,\n",
+        "  simple_return_1d_pct,\n",
+        "  CASE\n",
+        "    WHEN simple_return_1d > 0 THEN 'positive'\n",
+        "    WHEN simple_return_1d < 0 THEN 'negative'\n",
+        "    ELSE 'flat'\n",
+        "  END AS sentiment,\n",
+        "  FORMAT_STRING('%s %+.2f%%', base_asset, simple_return_1d_pct) AS kpi_label\n",
+        "FROM selected_movers\n",
+        "ORDER BY sort_order;\n"
+      ]
+    },
+    {
+      "name": "4ea7b69b",
+      "displayName": "Latest_Macro_Signals",
+      "queryLines": [
+        "WITH latest_signals AS (\n",
+        "  SELECT\n",
+        "    indicator_id,\n",
+        "    observation_date,\n",
+        "    value,\n",
+        "    unit,\n",
+        "    frequency,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY indicator_id\n",
+        "      ORDER BY observation_date DESC\n",
+        "    ) AS rn\n",
+        "  FROM market_macro.gld_macro.dp_macro_indicators\n",
+        "  WHERE indicator_id IN (\n",
+        "    'FRED_CPIAUCSL',\n",
+        "    'FRED_FEDFUNDS',\n",
+        "    'ECB_FX_REF_EUR_USD'\n",
+        "  )\n",
+        "),\n",
+        "eurusd_latest AS (\n",
+        "  SELECT\n",
+        "    observation_date,\n",
+        "    value,\n",
+        "    LAG(value) OVER (\n",
+        "      ORDER BY observation_date\n",
+        "    ) AS previous_value,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      ORDER BY observation_date DESC\n",
+        "    ) AS rn\n",
+        "  FROM market_macro.gld_macro.dp_macro_indicators\n",
+        "  WHERE indicator_id = 'ECB_FX_REF_EUR_USD'\n",
+        "),\n",
+        "macro_cards AS (\n",
+        "  SELECT\n",
+        "    1 AS sort_order,\n",
+        "    'Latest US CPI' AS card_title,\n",
+        "    'US CPI' AS signal_name,\n",
+        "    observation_date,\n",
+        "    value AS signal_value,\n",
+        "    unit,\n",
+        "    frequency,\n",
+        "    'fred' AS source_system,\n",
+        "    FORMAT_NUMBER(value, 1) AS signal_value_display\n",
+        "  FROM latest_signals\n",
+        "  WHERE indicator_id = 'FRED_CPIAUCSL'\n",
+        "    AND rn = 1\n",
+        "\n",
+        "  UNION ALL\n",
+        "\n",
+        "  SELECT\n",
+        "    2 AS sort_order,\n",
+        "    'Latest Fed Funds' AS card_title,\n",
+        "    'Fed Funds' AS signal_name,\n",
+        "    observation_date,\n",
+        "    value AS signal_value,\n",
+        "    unit,\n",
+        "    frequency,\n",
+        "    'fred' AS source_system,\n",
+        "    FORMAT_NUMBER(value, 2) AS signal_value_display\n",
+        "  FROM latest_signals\n",
+        "  WHERE indicator_id = 'FRED_FEDFUNDS'\n",
+        "    AND rn = 1\n",
+        "\n",
+        "  UNION ALL\n",
+        "\n",
+        "  SELECT\n",
+        "    3 AS sort_order,\n",
+        "    'Latest EUR/USD Move' AS card_title,\n",
+        "    'EUR/USD Daily Change' AS signal_name,\n",
+        "    observation_date,\n",
+        "    ((value - previous_value) / previous_value) * 100 AS signal_value,\n",
+        "    '% change' AS unit,\n",
+        "    'D' AS frequency,\n",
+        "    'ecb' AS source_system,\n",
+        "    FORMAT_STRING('%+.2f%%', ((value - previous_value) / previous_value) * 100) AS signal_value_display\n",
+        "  FROM eurusd_latest\n",
+        "  WHERE rn = 1\n",
+        "    AND previous_value IS NOT NULL\n",
+        ")\n",
+        "SELECT\n",
+        "  sort_order,\n",
+        "  card_title,\n",
+        "  signal_name,\n",
+        "  observation_date,\n",
+        "  signal_value,\n",
+        "  signal_value_display,\n",
+        "  unit,\n",
+        "  frequency,\n",
+        "  source_system\n",
+        "FROM macro_cards\n",
+        "ORDER BY sort_order;\n"
+      ]
     }
   ],
   "pages": [
     {
       "name": "7b16c99e",
-      "displayName": "Untitled page",
+      "displayName": "Overview",
       "layout": [
         {
           "widget": {
@@ -213,10 +696,10 @@
             }
           },
           "position": {
-            "x": 0,
+            "x": 1,
             "y": 0,
-            "width": 6,
-            "height": 7
+            "width": 10,
+            "height": 8
           }
         },
         {
@@ -324,15 +807,69 @@
             }
           },
           "position": {
-            "x": 6,
+            "x": 1,
+            "y": 8,
+            "width": 10,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "d732f380",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "f0347b8a",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
+              "frame": {
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
             "y": 0,
-            "width": 6,
-            "height": 7
+            "width": 1,
+            "height": 2
           }
         },
         {
           "widget": {
-            "name": "crypto-market-snapshot",
+            "name": "eee8de05",
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
+              "frame": {
+                "showTitle": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "5603219c",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "273a4bbd",
             "queries": [
               {
                 "name": "main_query",
@@ -414,15 +951,15 @@
             }
           },
           "position": {
-            "x": 0,
-            "y": 7,
-            "width": 6,
+            "x": 1,
+            "y": 0,
+            "width": 9,
             "height": 6
           }
         },
         {
           "widget": {
-            "name": "cross-feature-snapshot",
+            "name": "ebbeb4e8",
             "queries": [
               {
                 "name": "main_query",
@@ -504,15 +1041,15 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 7,
-            "width": 6,
-            "height": 6
+            "x": 1,
+            "y": 6,
+            "width": 9,
+            "height": 5
           }
         },
         {
           "widget": {
-            "name": "macro-indicator-latest",
+            "name": "c4bfbafa",
             "queries": [
               {
                 "name": "main_query",
@@ -601,9 +1138,9 @@
             }
           },
           "position": {
-            "x": 2,
-            "y": 13,
-            "width": 6,
+            "x": 1,
+            "y": 11,
+            "width": 9,
             "height": 6
           }
         }
@@ -612,49 +1149,1066 @@
       "layoutVersion": "GRID_V1"
     },
     {
-      "name": "d732f380",
-      "displayName": "Global Filters",
+      "name": "91f7d193",
+      "displayName": "Analytics",
       "layout": [
         {
           "widget": {
-            "name": "f0347b8a",
+            "name": "btc-30d-cumulative-log-return-vs-fedfunds",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "21f8c844",
+                  "fields": [
+                    {
+                      "name": "feature_date",
+                      "expression": "`feature_date`"
+                    },
+                    {
+                      "name": "fedfunds_value",
+                      "expression": "`fedfunds_value`"
+                    },
+                    {
+                      "name": "btc_price_index_100",
+                      "expression": "`btc_price_index_100`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`product_id` IN ('BTC-USD')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
             "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {},
+              "version": 1,
               "frame": {
-                "showTitle": true
+                "showTitle": true,
+                "title": "BTC Price Index vs Fed Funds Rate",
+                "headerAlignment": "center",
+                "showDescription": false,
+                "description": ""
+              },
+              "mark": {
+                "layout": "stack",
+                "colors": [
+                  "#EEF3F5",
+                  "#FF7F50",
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              },
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "feature_date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "label": {
+                  "show": false
+                },
+                "color": {
+                  "legend": {
+                    "position": "top"
+                  }
+                },
+                "y": {
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "fedfunds_value",
+                        "displayName": "Fed Funds (%)"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "all"
+                      },
+                      "significantFigures": {
+                        "type": "all"
+                      },
+                      "hideGroupSeparator": false
+                    },
+                    "axis": {
+                      "title": "Fed Funds (%)"
+                    }
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "btc_price_index_100",
+                        "displayName": "BTC (Base=100)"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative",
+                      "reverse": false
+                    },
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      },
+                      "significantFigures": {
+                        "type": "all"
+                      },
+                      "hideGroupSeparator": true,
+                      "negativeSign": "accounting"
+                    },
+                    "axis": {
+                      "hideLabels": false,
+                      "hideGrid": false,
+                      "title": "BTC (Base=100)"
+                    }
+                  }
+                }
               }
             }
           },
           "position": {
             "x": 0,
             "y": 0,
-            "width": 1,
+            "width": 11,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "btc-30d-rolling-volatility",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "11210f45",
+                  "fields": [
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    },
+                    {
+                      "name": "btc_volatility_30d_zscore_90d",
+                      "expression": "`btc_volatility_30d_zscore_90d`"
+                    },
+                    {
+                      "name": "eurusd_volatility_30d_zscore_90d",
+                      "expression": "`eurusd_volatility_30d_zscore_90d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "showTitle": true,
+                "title": "BTC vs EUR/USD Volatility Regime",
+                "headerAlignment": "center"
+              },
+              "mark": {
+                "colors": [
+                  "#FF7F50",
+                  "#000080",
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              },
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "observation_date",
+                  "axis": {
+                    "hideLabels": false,
+                    "hideGrid": false
+                  },
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "btc_volatility_30d_zscore_90d",
+                        "displayName": "BTC Volatility"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative",
+                      "domain": {
+                        "min": -4,
+                        "max": 4
+                      }
+                    },
+                    "axis": {
+                      "title": "90d z-score",
+                      "hideTitle": false
+                    }
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "eurusd_volatility_30d_zscore_90d",
+                        "displayName": "EUR/USD Volatility"
+                      }
+                    ],
+                    "scale": {
+                      "type": "quantitative"
+                    },
+                    "axis": {
+                      "hideTitle": true
+                    }
+                  }
+                },
+                "color": {
+                  "legend": {
+                    "position": "top"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 11,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "c24e467b",
+      "displayName": "Analytics",
+      "layout": [
+        {
+          "widget": {
+            "name": "btc-rolling-correlation-vs-macro",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "c795da62",
+                  "fields": [
+                    {
+                      "name": "indicator_label",
+                      "expression": "`indicator_label`"
+                    },
+                    {
+                      "name": "feature_date",
+                      "expression": "`feature_date`"
+                    },
+                    {
+                      "name": "rolling_corr_90d_smoothed_7d",
+                      "expression": "`rolling_corr_90d_smoothed_7d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "facet": {
+                "type": "wrap",
+                "fieldName": "indicator_label",
+                "layout": {
+                  "column": {
+                    "type": "count",
+                    "value": 1
+                  },
+                  "row": {
+                    "type": "count",
+                    "value": 3
+                  }
+                },
+                "header": {
+                  "hideTitle": true
+                },
+                "scale": {
+                  "type": "categorical",
+                  "sort": {
+                    "by": "custom-order",
+                    "orderedValues": [
+                      "EUR/USD",
+                      "US CPI",
+                      "Fed Funds"
+                    ]
+                  }
+                }
+              },
+              "version": 3,
+              "frame": {
+                "showTitle": true,
+                "title": "BTC Rolling Correlation vs Macro",
+                "headerAlignment": "center",
+                "showDescription": true,
+                "description": "90d rolling correlation, 7d smoothed, as-of observation-date fill, not backtest-safe"
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 1
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ],
+                "size": 0.4
+              },
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "feature_date",
+                  "axis": {
+                    "hideTitle": false,
+                    "hideLabels": false,
+                    "hideGrid": false
+                  },
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "rolling_corr_90d_smoothed_7d",
+                  "format": {
+                    "type": "number-plain",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "all"
+                    }
+                  },
+                  "axis": {
+                    "title": "Correlation"
+                  },
+                  "scale": {
+                    "type": "quantitative",
+                    "reverse": false,
+                    "domain": {
+                      "min": -0.3,
+                      "max": 0.3
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "indicator_label",
+                  "legend": {
+                    "position": "top",
+                    "title": ""
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "EUR/USD",
+                        "color": "#FF8F00"
+                      },
+                      {
+                        "value": "US CPI",
+                        "color": "#FF3B30"
+                      },
+                      {
+                        "value": "Fed Funds",
+                        "color": "#00E5FF"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 15
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "b2fc78ee",
+      "displayName": "Report",
+      "layout": [
+        {
+          "widget": {
+            "name": "top-gainer",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "38be28c0",
+                  "fields": [
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
+                    },
+                    {
+                      "name": "close",
+                      "expression": "`close`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Top Gainer')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Top Gainer",
+                "headerAlignment": "center"
+              },
+              "headerHeight": 33,
+              "freezeUpToColumnNumber": 20,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "product_id",
+                    "contentAlignment": "left",
+                    "formatTemplate": "{{ @formatted }}",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      },
+                      "bold": true
+                    }
+                  },
+                  {
+                    "fieldName": "close",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 5,
             "height": 2
           }
         },
         {
           "widget": {
-            "name": "eee8de05",
+            "name": "2nd-gainer",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "38be28c0",
+                  "fields": [
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
+                    },
+                    {
+                      "name": "close",
+                      "expression": "`close`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('2nd Gainer')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
             "spec": {
               "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {},
               "frame": {
-                "showTitle": true
+                "showTitle": true,
+                "title": "2nd Gainer",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "product_id",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 8
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 8
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "close",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 8
+                      }
+                    }
+                  }
+                ]
               }
             }
           },
           "position": {
             "x": 0,
             "y": 2,
-            "width": 1,
+            "width": 5,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "top-loser",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "38be28c0",
+                  "fields": [
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
+                    },
+                    {
+                      "name": "close",
+                      "expression": "`close`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Top Loser')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": " Top Loser",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "product_id",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "close",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      },
+                      "bold": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "2nd-loser",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "38be28c0",
+                  "fields": [
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
+                    },
+                    {
+                      "name": "close",
+                      "expression": "`close`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('2nd Loser')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "2nd Loser",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "product_id",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 7
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 7
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "close",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 7
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "latest-us-cpi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4ea7b69b",
+                  "fields": [
+                    {
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Latest US CPI')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Latest US CPI",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "signal_value_display",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 4,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "latest-fed-funds",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4ea7b69b",
+                  "fields": [
+                    {
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Latest Fed Funds')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Latest Fed Funds",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "signal_value_display",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 6,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "latest-eur-usd-move",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4ea7b69b",
+                  "fields": [
+                    {
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Latest EUR/USD Move')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Latest EUR/USD Move",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "signal_value_display",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      },
+                      "bold": true
+                    }
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "contentAlignment": "center",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 8,
+            "width": 4,
             "height": 2
           }
         }
       ],
-      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "pageType": "PAGE_TYPE_CANVAS",
       "layoutVersion": "GRID_V1"
     }
   ],
