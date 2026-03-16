@@ -32,11 +32,23 @@ macro_labeled AS (
     fill_policy,
     indicator_id,
     CASE
+      WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 'EUR/USD'
+      WHEN indicator_id = 'FRED_FEDFUNDS' THEN 'Fed Funds'
+      WHEN indicator_id = 'FRED_CPIAUCSL' THEN 'US CPI'
+      ELSE indicator_id
+    END AS indicator_label,
+    CASE
       WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 'fx_ref_rate'
       WHEN indicator_id = 'FRED_FEDFUNDS' THEN 'policy_rate'
       WHEN indicator_id = 'FRED_CPIAUCSL' THEN 'inflation'
       ELSE 'other'
     END AS indicator_group,
+    CASE
+      WHEN indicator_id = 'ECB_FX_REF_EUR_USD' THEN 1
+      WHEN indicator_id = 'FRED_CPIAUCSL' THEN 2
+      WHEN indicator_id = 'FRED_FEDFUNDS' THEN 3
+      ELSE 99
+    END AS sort_order,
     macro_value
   FROM macro_long
   WHERE crypto_log_return_1d IS NOT NULL
@@ -47,7 +59,9 @@ rolling_stats AS (
     feature_date,
     product_id,
     indicator_id,
+    indicator_label,
     indicator_group,
+    sort_order,
     macro_value,
     crypto_log_return_1d,
     fill_policy,
@@ -63,26 +77,47 @@ rolling_stats AS (
     ORDER BY feature_date
     ROWS BETWEEN 89 PRECEDING AND CURRENT ROW
   )
+),
+raw_correlations AS (
+  SELECT
+    feature_date,
+    product_id,
+    indicator_id,
+    indicator_label,
+    indicator_group,
+    sort_order,
+    macro_value,
+    crypto_log_return_1d,
+    fill_policy,
+    CASE
+      WHEN window_count < 90 THEN NULL
+      WHEN ((window_count * sum_x2 - sum_x * sum_x) <= 0)
+        OR ((window_count * sum_y2 - sum_y * sum_y) <= 0) THEN NULL
+      ELSE
+        (window_count * sum_xy - sum_x * sum_y)
+        / SQRT(
+          (window_count * sum_x2 - sum_x * sum_x)
+          * (window_count * sum_y2 - sum_y * sum_y)
+        )
+    END AS rolling_corr_90d
+  FROM rolling_stats
 )
 SELECT
   feature_date,
   product_id,
   indicator_id,
+  indicator_label,
   indicator_group,
+  sort_order,
   macro_value,
   crypto_log_return_1d,
-  CASE
-    WHEN window_count < 30 THEN NULL
-    WHEN ((window_count * sum_x2 - sum_x * sum_x) <= 0)
-      OR ((window_count * sum_y2 - sum_y * sum_y) <= 0) THEN NULL
-    ELSE
-      (window_count * sum_xy - sum_x * sum_y)
-      / SQRT(
-        (window_count * sum_x2 - sum_x * sum_x)
-        * (window_count * sum_y2 - sum_y * sum_y)
-      )
-  END AS rolling_corr_90d,
+  rolling_corr_90d,
+  AVG(rolling_corr_90d) OVER (
+    PARTITION BY product_id, indicator_id
+    ORDER BY feature_date
+    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+  ) AS rolling_corr_90d_smoothed_7d,
   fill_policy,
   false AS backtest_safe
-FROM rolling_stats
-ORDER BY indicator_id, feature_date;
+FROM raw_correlations
+ORDER BY sort_order, feature_date;
