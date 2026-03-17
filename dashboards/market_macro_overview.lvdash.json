@@ -609,304 +609,34 @@
   ],
   "pages": [
     {
-      "name": "7b16c99e",
+      "name": "b2fc78ee",
       "displayName": "Overview",
       "layout": [
         {
           "widget": {
-            "name": "pipeline-freshness",
+            "name": "top-gainer",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "75393183",
+                  "datasetName": "38be28c0",
                   "fields": [
-                    {
-                      "name": "pipeline_name",
-                      "expression": "`pipeline_name`"
-                    },
-                    {
-                      "name": "source_name",
-                      "expression": "`source_name`"
-                    },
-                    {
-                      "name": "target_table",
-                      "expression": "`target_table`"
-                    },
-                    {
-                      "name": "watermark_type",
-                      "expression": "`watermark_type`"
-                    },
-                    {
-                      "name": "watermark_value",
-                      "expression": "`watermark_value`"
-                    },
-                    {
-                      "name": "status",
-                      "expression": "`status`"
-                    },
-                    {
-                      "name": "last_success_at",
-                      "expression": "`last_success_at`"
-                    },
-                    {
-                      "name": "updated_at",
-                      "expression": "`updated_at`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "Pipeline Freshness"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "pipeline_name"
-                  },
-                  {
-                    "fieldName": "source_name"
-                  },
-                  {
-                    "fieldName": "target_table"
-                  },
-                  {
-                    "fieldName": "watermark_type"
-                  },
-                  {
-                    "fieldName": "watermark_value"
-                  },
-                  {
-                    "fieldName": "status"
-                  },
-                  {
-                    "fieldName": "last_success_at"
-                  },
-                  {
-                    "fieldName": "updated_at"
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 1,
-            "y": 0,
-            "width": 10,
-            "height": 8
-          }
-        },
-        {
-          "widget": {
-            "name": "recent-pipeline-runs",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "05984607",
-                  "fields": [
-                    {
-                      "name": "run_id",
-                      "expression": "`run_id`"
-                    },
-                    {
-                      "name": "pipeline_name",
-                      "expression": "`pipeline_name`"
-                    },
-                    {
-                      "name": "layer",
-                      "expression": "`layer`"
-                    },
-                    {
-                      "name": "source_name",
-                      "expression": "`source_name`"
-                    },
-                    {
-                      "name": "target_table",
-                      "expression": "`target_table`"
-                    },
-                    {
-                      "name": "status",
-                      "expression": "`status`"
-                    },
-                    {
-                      "name": "rows_read",
-                      "expression": "`rows_read`"
-                    },
-                    {
-                      "name": "rows_written",
-                      "expression": "`rows_written`"
-                    },
-                    {
-                      "name": "started_at",
-                      "expression": "`started_at`"
-                    },
-                    {
-                      "name": "completed_at",
-                      "expression": "`completed_at`"
-                    },
-                    {
-                      "name": "error_message",
-                      "expression": "`error_message`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "Recent Pipeline Runs"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "run_id"
-                  },
-                  {
-                    "fieldName": "pipeline_name"
-                  },
-                  {
-                    "fieldName": "layer"
-                  },
-                  {
-                    "fieldName": "source_name"
-                  },
-                  {
-                    "fieldName": "target_table"
-                  },
-                  {
-                    "fieldName": "status"
-                  },
-                  {
-                    "fieldName": "rows_read"
-                  },
-                  {
-                    "fieldName": "rows_written"
-                  },
-                  {
-                    "fieldName": "started_at"
-                  },
-                  {
-                    "fieldName": "completed_at"
-                  },
-                  {
-                    "fieldName": "error_message"
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 1,
-            "y": 8,
-            "width": 10,
-            "height": 8
-          }
-        }
-      ],
-      "pageType": "PAGE_TYPE_CANVAS",
-      "layoutVersion": "GRID_V1"
-    },
-    {
-      "name": "d732f380",
-      "displayName": "Global Filters",
-      "layout": [
-        {
-          "widget": {
-            "name": "f0347b8a",
-            "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {},
-              "frame": {
-                "showTitle": true
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 1,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "eee8de05",
-            "spec": {
-              "version": 2,
-              "widgetType": "filter-single-select",
-              "encodings": {},
-              "frame": {
-                "showTitle": true
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 2,
-            "width": 1,
-            "height": 2
-          }
-        }
-      ],
-      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
-      "layoutVersion": "GRID_V1"
-    },
-    {
-      "name": "5603219c",
-      "displayName": "Overview",
-      "layout": [
-        {
-          "widget": {
-            "name": "273a4bbd",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "f75a9729",
-                  "fields": [
-                    {
-                      "name": "bar_date",
-                      "expression": "`bar_date`"
-                    },
                     {
                       "name": "product_id",
                       "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
                     },
                     {
                       "name": "close",
                       "expression": "`close`"
-                    },
+                    }
+                  ],
+                  "filters": [
                     {
-                      "name": "simple_return_1d",
-                      "expression": "`simple_return_1d`"
-                    },
-                    {
-                      "name": "log_return_1d",
-                      "expression": "`log_return_1d`"
-                    },
-                    {
-                      "name": "volatility_7d",
-                      "expression": "`volatility_7d`"
-                    },
-                    {
-                      "name": "volatility_30d",
-                      "expression": "`volatility_30d`"
-                    },
-                    {
-                      "name": "volatility_90d",
-                      "expression": "`volatility_90d`"
+                      "expression": "`card_title` IN ('Top Gainer')"
                     }
                   ],
                   "disaggregated": true
@@ -917,86 +647,86 @@
               "version": 2,
               "frame": {
                 "showTitle": true,
-                "title": "Crypto Market Snapshot"
+                "title": "Top Gainer",
+                "headerAlignment": "center"
               },
+              "rowsPerPage": 25,
               "widgetType": "table",
               "encodings": {
                 "columns": [
                   {
-                    "fieldName": "bar_date"
+                    "fieldName": "product_id",
+                    "contentAlignment": "left",
+                    "formatTemplate": "{{ @formatted }}",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
                   },
                   {
-                    "fieldName": "product_id"
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      },
+                      "bold": true
+                    }
                   },
                   {
-                    "fieldName": "close"
-                  },
-                  {
-                    "fieldName": "simple_return_1d"
-                  },
-                  {
-                    "fieldName": "log_return_1d"
-                  },
-                  {
-                    "fieldName": "volatility_7d"
-                  },
-                  {
-                    "fieldName": "volatility_30d"
-                  },
-                  {
-                    "fieldName": "volatility_90d"
+                    "fieldName": "close",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
                   }
                 ]
               }
             }
           },
           "position": {
-            "x": 1,
-            "y": 0,
-            "width": 9,
-            "height": 6
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 2
           }
         },
         {
           "widget": {
-            "name": "ebbeb4e8",
+            "name": "top-loser",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "d91424cf",
+                  "datasetName": "38be28c0",
                   "fields": [
-                    {
-                      "name": "feature_date",
-                      "expression": "`feature_date`"
-                    },
                     {
                       "name": "product_id",
                       "expression": "`product_id`"
                     },
                     {
-                      "name": "simple_return_1d",
-                      "expression": "`simple_return_1d`"
+                      "name": "simple_return_1d_pct",
+                      "expression": "`simple_return_1d_pct`"
                     },
                     {
-                      "name": "log_return_1d",
-                      "expression": "`log_return_1d`"
-                    },
+                      "name": "close",
+                      "expression": "`close`"
+                    }
+                  ],
+                  "filters": [
                     {
-                      "name": "volatility_7d",
-                      "expression": "`volatility_7d`"
-                    },
-                    {
-                      "name": "volatility_30d",
-                      "expression": "`volatility_30d`"
-                    },
-                    {
-                      "name": "fill_policy",
-                      "expression": "`fill_policy`"
-                    },
-                    {
-                      "name": "macro_features",
-                      "expression": "`macro_features`"
+                      "expression": "`card_title` IN ('Top Loser')"
                     }
                   ],
                   "disaggregated": true
@@ -1007,90 +737,80 @@
               "version": 2,
               "frame": {
                 "showTitle": true,
-                "title": "Cross Feature Snapshot"
+                "title": " Top Loser",
+                "headerAlignment": "center"
               },
               "widgetType": "table",
               "encodings": {
                 "columns": [
                   {
-                    "fieldName": "feature_date"
+                    "fieldName": "product_id",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      }
+                    }
                   },
                   {
-                    "fieldName": "product_id"
+                    "fieldName": "simple_return_1d_pct",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      }
+                    }
                   },
                   {
-                    "fieldName": "simple_return_1d"
-                  },
-                  {
-                    "fieldName": "log_return_1d"
-                  },
-                  {
-                    "fieldName": "volatility_7d"
-                  },
-                  {
-                    "fieldName": "volatility_30d"
-                  },
-                  {
-                    "fieldName": "fill_policy"
-                  },
-                  {
-                    "fieldName": "macro_features"
+                    "fieldName": "close",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 3
+                      },
+                      "bold": true
+                    }
                   }
                 ]
               }
             }
           },
           "position": {
-            "x": 1,
-            "y": 6,
-            "width": 9,
-            "height": 5
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 2
           }
         },
         {
           "widget": {
-            "name": "c4bfbafa",
+            "name": "latest-us-cpi",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "760b3e5e",
+                  "datasetName": "4ea7b69b",
                   "fields": [
                     {
-                      "name": "source_system",
-                      "expression": "`source_system`"
-                    },
-                    {
-                      "name": "indicator_id",
-                      "expression": "`indicator_id`"
-                    },
-                    {
-                      "name": "indicator_group",
-                      "expression": "`indicator_group`"
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
                     },
                     {
                       "name": "observation_date",
                       "expression": "`observation_date`"
-                    },
+                    }
+                  ],
+                  "filters": [
                     {
-                      "name": "value",
-                      "expression": "`value`"
-                    },
-                    {
-                      "name": "unit",
-                      "expression": "`unit`"
-                    },
-                    {
-                      "name": "frequency",
-                      "expression": "`frequency`"
-                    },
-                    {
-                      "name": "is_official",
-                      "expression": "`is_official`"
-                    },
-                    {
-                      "name": "derivation_method",
-                      "expression": "`derivation_method`"
+                      "expression": "`card_title` IN ('Latest US CPI')"
                     }
                   ],
                   "disaggregated": true
@@ -1101,60 +821,226 @@
               "version": 2,
               "frame": {
                 "showTitle": true,
-                "title": "Macro Indicator Latest"
+                "title": "Latest US CPI",
+                "headerAlignment": "center"
               },
               "widgetType": "table",
               "encodings": {
                 "columns": [
                   {
-                    "fieldName": "source_system"
+                    "fieldName": "signal_value_display",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
                   },
                   {
-                    "fieldName": "indicator_id"
-                  },
-                  {
-                    "fieldName": "indicator_group"
-                  },
-                  {
-                    "fieldName": "observation_date"
-                  },
-                  {
-                    "fieldName": "value"
-                  },
-                  {
-                    "fieldName": "unit"
-                  },
-                  {
-                    "fieldName": "frequency"
-                  },
-                  {
-                    "fieldName": "is_official"
-                  },
-                  {
-                    "fieldName": "derivation_method"
+                    "fieldName": "observation_date",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
                   }
                 ]
               }
             }
           },
           "position": {
-            "x": 1,
-            "y": 11,
-            "width": 9,
-            "height": 6
+            "x": 6,
+            "y": 1,
+            "width": 2,
+            "height": 2
           }
-        }
-      ],
-      "pageType": "PAGE_TYPE_CANVAS",
-      "layoutVersion": "GRID_V1"
-    },
-    {
-      "name": "91f7d193",
-      "displayName": "Analytics",
-      "layout": [
+        },
         {
           "widget": {
-            "name": "btc-30d-cumulative-log-return-vs-fedfunds",
+            "name": "latest-fed-funds",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4ea7b69b",
+                  "fields": [
+                    {
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Latest Fed Funds')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Latest Fed Funds",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "signal_value_display",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 1,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "latest-eur-usd-move",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4ea7b69b",
+                  "fields": [
+                    {
+                      "name": "signal_value_display",
+                      "expression": "`signal_value_display`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "`card_title` IN ('Latest EUR/USD Move')"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Latest EUR/USD Move",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "signal_value_display",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      },
+                      "bold": true
+                    }
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "contentAlignment": "left",
+                    "style": {
+                      "type": "basic",
+                      "bold": true,
+                      "foregroundColor": {
+                        "themeColorType": "visualizationColors",
+                        "position": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 1,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "7dcdc2ee",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### <span style=\"text-align:center;display:block;\">📈 Top Crypto Movers</span>"
+              ]
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 2,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "d2c4406c",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### <span style=\"text-align:center;display:block;\">🌍 Latest Macro Signals</span>"
+              ]
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 2,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "4cba24c4",
             "queries": [
               {
                 "name": "main_query",
@@ -1309,14 +1195,14 @@
           },
           "position": {
             "x": 0,
-            "y": 0,
-            "width": 11,
-            "height": 7
+            "y": 3,
+            "width": 12,
+            "height": 8
           }
         },
         {
           "widget": {
-            "name": "btc-30d-rolling-volatility",
+            "name": "558ff861",
             "queries": [
               {
                 "name": "main_query",
@@ -1408,8 +1294,8 @@
                     "scale": {
                       "type": "quantitative",
                       "domain": {
-                        "min": -4,
-                        "max": 4
+                        "min": -5,
+                        "max": 5
                       }
                     },
                     "axis": {
@@ -1442,22 +1328,14 @@
           },
           "position": {
             "x": 0,
-            "y": 7,
-            "width": 11,
+            "y": 11,
+            "width": 12,
             "height": 8
           }
-        }
-      ],
-      "pageType": "PAGE_TYPE_CANVAS",
-      "layoutVersion": "GRID_V1"
-    },
-    {
-      "name": "c24e467b",
-      "displayName": "Analytics",
-      "layout": [
+        },
         {
           "widget": {
-            "name": "btc-rolling-correlation-vs-macro",
+            "name": "19775c08",
             "queries": [
               {
                 "name": "main_query",
@@ -1608,7 +1486,7 @@
                     "mappings": [
                       {
                         "value": "EUR/USD",
-                        "color": "#FF8F00"
+                        "color": "#000080"
                       },
                       {
                         "value": "US CPI",
@@ -1629,9 +1507,491 @@
           },
           "position": {
             "x": 0,
-            "y": 0,
+            "y": 19,
             "width": 12,
             "height": 15
+          }
+        },
+        {
+          "widget": {
+            "name": "c717158e",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "75393183",
+                  "fields": [
+                    {
+                      "name": "pipeline_name",
+                      "expression": "`pipeline_name`"
+                    },
+                    {
+                      "name": "source_name",
+                      "expression": "`source_name`"
+                    },
+                    {
+                      "name": "target_table",
+                      "expression": "`target_table`"
+                    },
+                    {
+                      "name": "watermark_type",
+                      "expression": "`watermark_type`"
+                    },
+                    {
+                      "name": "watermark_value",
+                      "expression": "`watermark_value`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "last_success_at",
+                      "expression": "`last_success_at`"
+                    },
+                    {
+                      "name": "updated_at",
+                      "expression": "`updated_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Pipeline Freshness",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "pipeline_name"
+                  },
+                  {
+                    "fieldName": "source_name"
+                  },
+                  {
+                    "fieldName": "target_table"
+                  },
+                  {
+                    "fieldName": "watermark_type"
+                  },
+                  {
+                    "fieldName": "watermark_value"
+                  },
+                  {
+                    "fieldName": "status"
+                  },
+                  {
+                    "fieldName": "last_success_at"
+                  },
+                  {
+                    "fieldName": "updated_at"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 34,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "6773e36c",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "05984607",
+                  "fields": [
+                    {
+                      "name": "run_id",
+                      "expression": "`run_id`"
+                    },
+                    {
+                      "name": "pipeline_name",
+                      "expression": "`pipeline_name`"
+                    },
+                    {
+                      "name": "layer",
+                      "expression": "`layer`"
+                    },
+                    {
+                      "name": "source_name",
+                      "expression": "`source_name`"
+                    },
+                    {
+                      "name": "target_table",
+                      "expression": "`target_table`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "rows_read",
+                      "expression": "`rows_read`"
+                    },
+                    {
+                      "name": "rows_written",
+                      "expression": "`rows_written`"
+                    },
+                    {
+                      "name": "started_at",
+                      "expression": "`started_at`"
+                    },
+                    {
+                      "name": "completed_at",
+                      "expression": "`completed_at`"
+                    },
+                    {
+                      "name": "error_message",
+                      "expression": "`error_message`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Recent Pipeline Runs"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "run_id"
+                  },
+                  {
+                    "fieldName": "pipeline_name"
+                  },
+                  {
+                    "fieldName": "layer"
+                  },
+                  {
+                    "fieldName": "source_name"
+                  },
+                  {
+                    "fieldName": "target_table"
+                  },
+                  {
+                    "fieldName": "status"
+                  },
+                  {
+                    "fieldName": "rows_read"
+                  },
+                  {
+                    "fieldName": "rows_written"
+                  },
+                  {
+                    "fieldName": "started_at"
+                  },
+                  {
+                    "fieldName": "completed_at"
+                  },
+                  {
+                    "fieldName": "error_message"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 42,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "69ab597d",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "f75a9729",
+                  "fields": [
+                    {
+                      "name": "bar_date",
+                      "expression": "`bar_date`"
+                    },
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "close",
+                      "expression": "`close`"
+                    },
+                    {
+                      "name": "simple_return_1d",
+                      "expression": "`simple_return_1d`"
+                    },
+                    {
+                      "name": "log_return_1d",
+                      "expression": "`log_return_1d`"
+                    },
+                    {
+                      "name": "volatility_7d",
+                      "expression": "`volatility_7d`"
+                    },
+                    {
+                      "name": "volatility_30d",
+                      "expression": "`volatility_30d`"
+                    },
+                    {
+                      "name": "volatility_90d",
+                      "expression": "`volatility_90d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Crypto Market Snapshot",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "bar_date"
+                  },
+                  {
+                    "fieldName": "product_id"
+                  },
+                  {
+                    "fieldName": "close"
+                  },
+                  {
+                    "fieldName": "simple_return_1d"
+                  },
+                  {
+                    "fieldName": "log_return_1d"
+                  },
+                  {
+                    "fieldName": "volatility_7d"
+                  },
+                  {
+                    "fieldName": "volatility_30d"
+                  },
+                  {
+                    "fieldName": "volatility_90d"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 50,
+            "width": 12,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "2a99ae9d",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d91424cf",
+                  "fields": [
+                    {
+                      "name": "feature_date",
+                      "expression": "`feature_date`"
+                    },
+                    {
+                      "name": "product_id",
+                      "expression": "`product_id`"
+                    },
+                    {
+                      "name": "simple_return_1d",
+                      "expression": "`simple_return_1d`"
+                    },
+                    {
+                      "name": "log_return_1d",
+                      "expression": "`log_return_1d`"
+                    },
+                    {
+                      "name": "volatility_7d",
+                      "expression": "`volatility_7d`"
+                    },
+                    {
+                      "name": "volatility_30d",
+                      "expression": "`volatility_30d`"
+                    },
+                    {
+                      "name": "fill_policy",
+                      "expression": "`fill_policy`"
+                    },
+                    {
+                      "name": "macro_features",
+                      "expression": "`macro_features`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Cross Feature Snapshot",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "feature_date"
+                  },
+                  {
+                    "fieldName": "product_id"
+                  },
+                  {
+                    "fieldName": "simple_return_1d"
+                  },
+                  {
+                    "fieldName": "log_return_1d"
+                  },
+                  {
+                    "fieldName": "volatility_7d"
+                  },
+                  {
+                    "fieldName": "volatility_30d"
+                  },
+                  {
+                    "fieldName": "fill_policy"
+                  },
+                  {
+                    "fieldName": "macro_features"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 54,
+            "width": 12,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b85d8dfb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "760b3e5e",
+                  "fields": [
+                    {
+                      "name": "source_system",
+                      "expression": "`source_system`"
+                    },
+                    {
+                      "name": "indicator_id",
+                      "expression": "`indicator_id`"
+                    },
+                    {
+                      "name": "indicator_group",
+                      "expression": "`indicator_group`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    },
+                    {
+                      "name": "value",
+                      "expression": "`value`"
+                    },
+                    {
+                      "name": "unit",
+                      "expression": "`unit`"
+                    },
+                    {
+                      "name": "frequency",
+                      "expression": "`frequency`"
+                    },
+                    {
+                      "name": "is_official",
+                      "expression": "`is_official`"
+                    },
+                    {
+                      "name": "derivation_method",
+                      "expression": "`derivation_method`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Macro Indicator Latest",
+                "headerAlignment": "center"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "source_system"
+                  },
+                  {
+                    "fieldName": "indicator_id"
+                  },
+                  {
+                    "fieldName": "indicator_group"
+                  },
+                  {
+                    "fieldName": "observation_date"
+                  },
+                  {
+                    "fieldName": "value"
+                  },
+                  {
+                    "fieldName": "unit"
+                  },
+                  {
+                    "fieldName": "frequency"
+                  },
+                  {
+                    "fieldName": "is_official"
+                  },
+                  {
+                    "fieldName": "derivation_method"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 58,
+            "width": 12,
+            "height": 3
           }
         }
       ],
@@ -1639,576 +1999,49 @@
       "layoutVersion": "GRID_V1"
     },
     {
-      "name": "b2fc78ee",
-      "displayName": "Report",
+      "name": "d732f380",
+      "displayName": "Global Filters",
       "layout": [
         {
           "widget": {
-            "name": "top-gainer",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "38be28c0",
-                  "fields": [
-                    {
-                      "name": "product_id",
-                      "expression": "`product_id`"
-                    },
-                    {
-                      "name": "simple_return_1d_pct",
-                      "expression": "`simple_return_1d_pct`"
-                    },
-                    {
-                      "name": "close",
-                      "expression": "`close`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('Top Gainer')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "name": "f0347b8a",
             "spec": {
               "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
               "frame": {
-                "showTitle": true,
-                "title": "Top Gainer",
-                "headerAlignment": "center"
-              },
-              "headerHeight": 33,
-              "freezeUpToColumnNumber": 20,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "product_id",
-                    "contentAlignment": "left",
-                    "formatTemplate": "{{ @formatted }}",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "simple_return_1d_pct",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      },
-                      "bold": true
-                    }
-                  },
-                  {
-                    "fieldName": "close",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  }
-                ]
+                "showTitle": true
               }
             }
           },
           "position": {
             "x": 0,
             "y": 0,
-            "width": 5,
+            "width": 1,
             "height": 2
           }
         },
         {
           "widget": {
-            "name": "2nd-gainer",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "38be28c0",
-                  "fields": [
-                    {
-                      "name": "product_id",
-                      "expression": "`product_id`"
-                    },
-                    {
-                      "name": "simple_return_1d_pct",
-                      "expression": "`simple_return_1d_pct`"
-                    },
-                    {
-                      "name": "close",
-                      "expression": "`close`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('2nd Gainer')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
+            "name": "eee8de05",
             "spec": {
               "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {},
               "frame": {
-                "showTitle": true,
-                "title": "2nd Gainer",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "product_id",
-                    "contentAlignment": "left",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 8
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "simple_return_1d_pct",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 8
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "close",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 8
-                      }
-                    }
-                  }
-                ]
+                "showTitle": true
               }
             }
           },
           "position": {
             "x": 0,
             "y": 2,
-            "width": 5,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "top-loser",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "38be28c0",
-                  "fields": [
-                    {
-                      "name": "product_id",
-                      "expression": "`product_id`"
-                    },
-                    {
-                      "name": "simple_return_1d_pct",
-                      "expression": "`simple_return_1d_pct`"
-                    },
-                    {
-                      "name": "close",
-                      "expression": "`close`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('Top Loser')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": " Top Loser",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "product_id",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 3
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "simple_return_1d_pct",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 3
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "close",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 3
-                      },
-                      "bold": true
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 5,
-            "y": 0,
-            "width": 6,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "2nd-loser",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "38be28c0",
-                  "fields": [
-                    {
-                      "name": "product_id",
-                      "expression": "`product_id`"
-                    },
-                    {
-                      "name": "simple_return_1d_pct",
-                      "expression": "`simple_return_1d_pct`"
-                    },
-                    {
-                      "name": "close",
-                      "expression": "`close`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('2nd Loser')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "2nd Loser",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "product_id",
-                    "style": {
-                      "type": "basic",
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 7
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "simple_return_1d_pct",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 7
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "close",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 7
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 5,
-            "y": 2,
-            "width": 6,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "latest-us-cpi",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "4ea7b69b",
-                  "fields": [
-                    {
-                      "name": "signal_value_display",
-                      "expression": "`signal_value_display`"
-                    },
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('Latest US CPI')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "Latest US CPI",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "signal_value_display",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "observation_date",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 4,
-            "y": 4,
-            "width": 4,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "latest-fed-funds",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "4ea7b69b",
-                  "fields": [
-                    {
-                      "name": "signal_value_display",
-                      "expression": "`signal_value_display`"
-                    },
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('Latest Fed Funds')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "Latest Fed Funds",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "signal_value_display",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  },
-                  {
-                    "fieldName": "observation_date",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 4,
-            "y": 6,
-            "width": 4,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "latest-eur-usd-move",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "4ea7b69b",
-                  "fields": [
-                    {
-                      "name": "signal_value_display",
-                      "expression": "`signal_value_display`"
-                    },
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    }
-                  ],
-                  "filters": [
-                    {
-                      "expression": "`card_title` IN ('Latest EUR/USD Move')"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "frame": {
-                "showTitle": true,
-                "title": "Latest EUR/USD Move",
-                "headerAlignment": "center"
-              },
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "signal_value_display",
-                    "style": {
-                      "type": "basic",
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      },
-                      "bold": true
-                    }
-                  },
-                  {
-                    "fieldName": "observation_date",
-                    "contentAlignment": "center",
-                    "style": {
-                      "type": "basic",
-                      "bold": true,
-                      "foregroundColor": {
-                        "themeColorType": "visualizationColors",
-                        "position": 4
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "position": {
-            "x": 4,
-            "y": 8,
-            "width": 4,
+            "width": 1,
             "height": 2
           }
         }
       ],
-      "pageType": "PAGE_TYPE_CANVAS",
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
       "layoutVersion": "GRID_V1"
     }
   ],
