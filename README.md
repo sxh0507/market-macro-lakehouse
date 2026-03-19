@@ -1,168 +1,209 @@
 # Market Macro Lakehouse
 
-Databricks Lakehouse project for building scalable market and macroeconomic data pipelines.
+Production-style Databricks lakehouse for crypto market and macroeconomic data pipelines, analytics products, observability, and dashboard delivery.
 
-This repository demonstrates production-style data engineering practices, including modular pipeline design, CI testing, and Databricks job orchestration.
+- Multi-source ingestion from Coinbase, ECB, and FRED
+- Bronze / Silver / Gold / Cross data products on Delta Lake
+- Serverless orchestration, dashboard refresh, and operational monitoring
+- Thin notebooks + reusable Python pipelines, CI, and unit tests
+
+Quick links:
+- [Runbook](docs/runbook.md)
+- [Dashboard Guide](docs/dashboard.md)
+- [Job Operations](docs/job-operations.md)
+- [Architecture Source](docs/assets/market_macro_architecture.drawio)
+
+## Why This Project
+
+This repository is designed to demonstrate production-style data engineering on Databricks rather than exploratory notebook work.
+
+It combines ingestion, transformation, analytics modeling, observability, CI, deployment automation, and AI/BI dashboard delivery in one coherent platform.
+
+The project supports both historical backfill and daily incremental execution and is structured around a thin notebook + heavy Python module pattern.
 
 ## Architecture
 
-The platform implements a Medallion Lakehouse Architecture on Databricks.
+The platform follows a Databricks medallion design with a reusable execution layer and operational monitoring.
 
-Data flows through Bronze → Silver → Gold → Observability layers.
+- Source ingestion starts from Coinbase, ECB, and FRED
+- Thin notebooks trigger reusable Python pipelines in `src/lakehouse`
+- Data is modeled through Bronze, Silver, Gold, and Cross layers
+- Observability tables capture pipeline runs, ingestion state, and DQ metrics
+- Delivery is automated through Databricks Asset Bundles, serverless jobs, and dashboards
 
-                External Data Sources
-          ┌───────────────────────────────┐
-          │ Coinbase │ ECB │ FRED APIs    │
-          └───────────────┬───────────────┘
-                          │
-                          ▼
-                    Bronze Layer
-             Raw ingestion (API → Delta)
+![Market Macro Lakehouse Architecture](docs/assets/market_macro_architecture.svg)
 
-                          │
-                          ▼
-                    Silver Layer
-          Cleaning, normalization, deduplication
+*Production architecture for the Databricks market-macro lakehouse, showing source ingestion, execution/orchestration, medallion data flow, and delivery-ready engineering structure.*
 
-                          │
-                          ▼
-                     Gold Layer
-           Analytics-ready data products
+Architecture legend:
+- Green arrows: source ingestion flow from external APIs into notebook entrypoints
+- Blue arrows: deployment and orchestration flow across bundles, jobs, notebooks, and reusable pipelines
+- Purple arrows: layer-specific pipeline writes and Delta merge operations into medallion tables
+- Gray dashed arrows: runtime configuration inputs and side-path quality control handling
 
-                          │
-                          ▼
-                  Observability Layer
-              Data quality & pipeline metrics
+Architecture source:
+- [docs/assets/market_macro_architecture.drawio](docs/assets/market_macro_architecture.drawio)
 
-## Project Overview
+## What It Produces
 
-This project separates pipeline orchestration from business logic.
+### Market products
 
-### Notebook Layer
+- `gld_market.dp_crypto_returns_1d`
+- `gld_market.dp_crypto_volatility_1d`
 
-Responsible for:
+### Macro products
 
-- runtime parameters
-- 
-- pipeline orchestration
-- 
-- Databricks job entrypoints
+- `gld_macro.dp_macro_indicators`
+- `slv_macro.ecb_fx_ref_rates_daily`
+- `slv_macro.fred_series_clean`
 
-### Python Package (src/lakehouse)
+### Cross-domain products
 
-Responsible for:
+- `gld_cross.dp_crypto_macro_features_1d`
+- Dashboard-oriented datasets for crypto movers, macro signals, volatility regimes, and correlation views
 
-- API clients
-- parsing logic
-- transformations
-- reusable pipeline utilities
-- data quality rules
+### Operational products
 
-This design follows the **Thin Notebook + Heavy Python Module** pattern commonly used in production Databricks projects.
+- `obs.obs_pipeline_run_log`
+- `obs.obs_ingestion_state`
+- `obs.obs_dq_metrics`
 
-## Data Sources
+## Dashboard Highlights
 
-The project currently integrates multiple data domains.
+The dashboard is designed as a production-style analytics surface rather than a notebook demo.
 
-### Crypto Market Data
+### Overview page
 
-Source: Coinbase API
+![Dashboard Overview](docs/assets/dashboard_overview.png)
 
-Example data:
+Overview page showing:
+- `Top Crypto Movers`
+- `Latest Macro Signals`
+- `BTC Price Index vs Fed Funds Rate`
+- `BTC vs EUR/USD Volatility Regime`
 
-- BTC / ETH OHLC
-- trade volumes
-- market activity signals
+### Analytics view
 
-### ECB Exchange Rates
+![Dashboard Correlation View](docs/assets/dashboard_correlation.png)
 
-Source: European Central Bank
+Analytics view highlighting:
+- `BTC Rolling Correlation vs Macro`
+- EUR/USD, US CPI, and Fed Funds relationship monitoring
+- Smoothed cross-domain signal behavior for exploratory analysis
 
-Example data:
+### Pipeline health page
 
-- EUR reference FX rates
-- cross-currency reference values
+![Dashboard Pipeline Health](docs/assets/dashboard_pipeline_health.png)
 
-### FRED Macroeconomic Indicators
+Operational monitoring page covering:
+- `Pipeline Freshness`
+- `Recent Pipeline Runs`
+- Data freshness, recent execution status, and end-to-end workflow visibility
 
-Source: Federal Reserve Economic Data
+## Production Engineering Features
 
-Example data:
-
-- interest rates
-- inflation indicators
-- macroeconomic series
+- Idempotent Delta `MERGE`-based batch pipelines
+- Historical backfill and daily incremental execution modes
+- Thin notebook + heavy Python module architecture
+- Data quality rules with quarantine tables
+- Observability tables for runs, freshness, and DQ metrics
+- Serverless Databricks job orchestration
+- Dashboard refresh automation
+- GitHub Actions CI and unit test coverage
 
 ## Tech Stack
 
-Core technologies used in this project:
-
-### Data Platform
-
 - Databricks
-- Apache Spark
+- Apache Spark / PySpark
 - Delta Lake
-
-### Languages
-
 - Python
 - SQL
-
-### Engineering Tools
-
-- Git
-- GitHub
+- Databricks Asset Bundles
 - GitHub Actions
+- Pytest
+- Ruff
+- AI/BI Dashboards
 
-### Code Quality
-
-- Ruff (lint + formatting)
-- Pytest (unit tests)
-
-## Repository Structure
+## Repository Layout
 
 ```text
 .
 ├── src/lakehouse/
-│   ├── sources/                 # API source adapters (coinbase / ecb / fred)
-│   ├── common/                  # shared utilities (time windowing, ingestion utils)
-│   ├── pipelines/               # bronze / silver / gold orchestration modules
+│   ├── sources/                 # source adapters (coinbase / ecb / fred)
+│   ├── common/                  # shared runtime helpers and models
+│   ├── pipelines/               # bronze / silver / gold / obs pipeline modules
 │   ├── transforms/              # reusable transformation logic
-│   └── *_rules.py               # data quality & observability rules
+│   └── observability.py         # pipeline run/state helpers
+├── notebooks/                   # thin Databricks entry notebooks
+├── dashboards/                  # AI/BI dashboard export and SQL datasets
+├── docs/                        # runbook, job ops, dashboard notes, architecture
 ├── tests/unit/                  # unit tests aligned with src layout
-├── docs/                        # architecture and pipeline documentation
 ├── .github/workflows/ci.yml     # lint + unit test CI
-├── databricks.yml               # Databricks bundle/job definition
-└── notebooks/                   # thin entry notebooks
+└── databricks.yml               # Databricks bundle definition
 ```
 
 ## Pipeline Execution Order
 
-Pipeline notebooks follow the sequence below.
+**1. Platform setup**
 
-**1. Platform initialization**
-
-      00_platform_setup_catalog_schema.ipynb
+- `00_platform_setup_catalog_schema.ipynb`
 
 **2. Bronze ingestion**
 
-      10_direct_bronze_market_crypto_ingest.ipynb
-      11_bronze_ecb_ingest.ipynb
-      12_bronze_fred_ingest.ipynb
+- `10_direct_bronze_market_crypto_ingest.ipynb`
+- `11_bronze_ecb_ingest.ipynb`
+- `12_bronze_fred_ingest.ipynb`
 
 **3. Silver transformation**
 
-      20_silver_crypto_transform.ipynb
-      22_silver_macro_transform.ipynb
+- `20_direct_silver_market_crypto_ohlc_1d.ipynb`
+- `22_silver_macro_transform.ipynb`
 
 **4. Gold analytics**
 
-      30_gold_market_metrics.ipynb
-      32_gold_macro_indicators.ipynb
+- `30_direct_gold_market_crypto_returns_volatility_1d.ipynb`
+- `32_gold_macro_indicators.ipynb`
+- `40_direct_gold_cross_crypto_macro_features_1d.ipynb`
 
 **5. Observability**
 
-      70_pipeline_observability_metrics.ipynb
+- `70_pipeline_observability_metrics.ipynb`
+
+## Quickstart
+
+1. Deploy the Databricks bundle:
+
+   ```bash
+   databricks bundle deploy --target dev
+   ```
+
+2. Run the daily workflow manually:
+
+   ```bash
+   databricks bundle run market_macro_daily --target dev
+   ```
+
+3. Open the AI/BI dashboard and validate:
+   - crypto movers and macro signal cards
+   - BTC price vs Fed Funds
+   - volatility and correlation views
+   - pipeline freshness and recent runs
+
+For full operating steps, see the [runbook](docs/runbook.md).
+
+## Documentation
+
+- [Runbook](docs/runbook.md)
+- [Dashboard Guide](docs/dashboard.md)
+- [Job Operations](docs/job-operations.md)
+
+## Engineering Conventions
+
+- Notebooks contain orchestration and runtime parameters only
+- Business logic lives in reusable Python modules
+- Each source has isolated parsing and client logic
+- Shared runtime logic is centralized in `src/lakehouse/common`
+- Dashboard and bundle assets are version-controlled alongside code
 
 ## Local Development
 
@@ -170,105 +211,28 @@ Pipeline notebooks follow the sequence below.
 
 - Python 3.10+
 - Git
-- PySpark for Spark tests
 
-### Install Dependencies
+### Install dependencies
 
-- python3 -m pip install --upgrade pip
-- python3 -m pip install -e ".[dev]"
+```bash
+python3 -m pip install --upgrade pip
+python3 -m pip install -e ".[dev]"
+```
 
-### Run Quality Checks
+### Run checks
 
-- python3 -m ruff check src tests
-- python3 -m ruff format --check src tests
-- python3 -m pytest -q tests/unit -m "not spark"
-
-## Continuous Integration
-
-The CI pipeline runs automatically on GitHub.
-
-### CI tasks include:
-
-- ruff check src/ tests/
-- ruff format --check src/ tests/
-- pytest tests/unit -m "not spark"
-
-### CI ensures that:
-
-- code style is consistent
-- unit tests pass
-- pipeline logic remains stable
-
-## Databricks Deployment
-
-### Import Repository
-
-- Go to Databricks Repos
-- Click Add Repo
-- Connect to this GitHub repository
-
-### Install Python Package
-
-In the first notebook cell:
-
-      %pip install .
-      dbutils.library.restartPython()
-
-This installs the lakehouse package into the cluster environment.
-
-### Validate Bronze Pipeline
-
-After running:
-
-      10_direct_bronze_market_crypto_ingest.ipynb
-
-Verify:
-
-      result["status"] == "success"
-      result["rows_written"] > 0
-
-Data should appear in the **Bronze Delta table** for the generated run_id.
-
-## Engineering Conventions
-
-Key design principles used in this project:
-
-### Thin Notebook
-
-- notebooks contain only orchestration logic
-
-### Heavy Python Modules
-
-- business logic lives in reusable Python modules
-
-### Source Isolation
-
-- each data source has its own client and parser module
-
-### Reusable Utilities
-
-- shared logic lives in common
-
-### Incremental Migration
-
-- legacy compatibility layers are removed once new modules are adopted
-
-## Future Improvements
-
-Planned extensions for the project:
-
-- Historical macroeconomic analytics
-- Market volatility regime modeling
-- Feature engineering for ML pipelines
-- Gold data products for financial analytics
+```bash
+python3 -m ruff check src tests
+python3 -m pytest tests/unit -q
+```
 
 ## Summary
 
-This project demonstrates a **production-style data engineering workflow**, including:
+This project demonstrates a portfolio-ready Databricks data platform with:
 
-- modular pipeline architecture
-- Databricks Lakehouse design
-- CI-enabled code quality
-- testable data pipelines
-- scalable data ingestion patterns
-
+- reusable multi-source ingestion pipelines
+- medallion lakehouse modeling
+- cross-domain analytics products
+- operational monitoring and DQ controls
+- CI-backed engineering workflow
+- automated dashboard delivery
